@@ -3,14 +3,14 @@ from typing import Optional
 
 
 def _get_mode() -> str:
-    mode = os.getenv("MODE", "dev").lower()
+    mode = os.environ.get("MODE", "dev").lower()
     if mode not in ("dev", "prod"):
         raise ValueError(f"MODE must be 'dev' or 'prod', got {mode!r}")
     return mode
 
 
 MODE = _get_mode()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 # Model choices below reflect the recommendation discussed: Qwen3.6 (small),
 # DeepSeek V4 Flash (medium), GLM-5.2 (best) -- current strongest
@@ -22,22 +22,22 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TIER_CONFIGS = {
     "dev": {
         "classifier": {
-            "model": "openrouter/qwen/qwen3.6-4b",
+            "model": "inclusionai/ling-3.0-flash-vl:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "small": {
-            "model": "openrouter/qwen/qwen3.6-4b",
+            "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "medium": {
-            "model": "openrouter/deepseek/deepseek-v4-flash",
+            "model": "nex-agi/nex-n2.5-pro:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "best": {
-            "model": "openrouter/z-ai/glm-5.2",
+            "model": "poolside/laguna-s-2.1:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
@@ -67,17 +67,17 @@ TIER_CONFIGS = {
 }
 
 TIER_THRESHOLDS = {
-    "small_to_medium": float(os.getenv("THRESH_SMALL_MEDIUM", "0.3")),
-    "medium_to_best": float(os.getenv("THRESH_MEDIUM_BEST", "0.7")),
+    "small_to_medium": float(os.environ.get("THRESH_SMALL_MEDIUM", "0.3")),
+    "medium_to_best": float(os.environ.get("THRESH_MEDIUM_BEST", "0.7")),
 }
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.environ.get("REDIS_URL")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-MAX_AGENT_ITERATIONS = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
-MAX_AGENT_RUNTIME_SECONDS = int(os.getenv("MAX_AGENT_RUNTIME_SECONDS", "600"))
+MAX_AGENT_ITERATIONS = int(os.environ.get("MAX_AGENT_ITERATIONS", "10"))
+MAX_AGENT_RUNTIME_SECONDS = int(os.environ.get("MAX_AGENT_RUNTIME_SECONDS", "600"))
 
 
 def get_tier_config(tier: str) -> dict:
@@ -87,7 +87,7 @@ def get_tier_config(tier: str) -> dict:
     cfg = dict(TIER_CONFIGS[MODE][tier])
 
     if MODE == "prod":
-        api_base = os.getenv(cfg.pop("api_base_env"))
+        api_base = os.environ.get(cfg.pop("api_base_env"))
         if not api_base:
             raise RuntimeError(
                 f"MODE=prod but no RunPod URL set for tier '{tier}'. "
