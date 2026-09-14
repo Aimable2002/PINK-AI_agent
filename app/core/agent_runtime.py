@@ -1,0 +1,143 @@
+"""
+The agent loop itself: call the model, execute any tool calls it requests
+via the connected MCP servers, feed results back, repeat until the model
+stops requesting tools or a safety cap is hit.
+
+This does NOT decide what "good" or "done" means -- that judgment is the
+model's own, driven entirely by the user's prompt (see conversation
+history: the model interprets the goal, we don't hardcode an objective
+function). This module only provides the mechanical loop and the safety
+backstop (max iterations / max runtime) that prevents a runaway loop from
+consuming unbounded compute if the model never converges on its own.
+"""
+
+import time
+
+from app.config import MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS
+from app.core.llm_client import call_tier
+from app.connectors.manager import MCPConnectorManager
+from app.core.router import select_tier
+
+
+class AgentRunResult:
+    def __init__(self):
+        self.steps: list[dict] = []
+        self.final_message: str | None = None
+        self.stopped_reason: str | None = None
+        self.tiers_used: list[str] = []
+
+    def to_dict(self) -> dict:
+        return {
+            "steps": self.steps,
+            "final_message": self.final_message,
+            "stopped_reason": self.stopped_reason,
+            "tiers_used": self.tiers_used,
+        }
+
+
+def _extract_tool_calls(response) -> list[dict]:
+    """
+    Normalizes tool-call requests out of a LiteLLM/OpenAI-format response.
+    Returns [] if the model produced a plain answer with no tool calls.
+    """
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return []
+
+    tool_calls = getattr(message, "tool_calls", None) or []
+    normalized = []
+    for tc in tool_calls:
+        normalized.append({
+            "id": getattr(tc, "id", None),
+            "name": tc.function.name,
+            "arguments": tc.function.arguments,
+        })
+    return normalized
+
+
+def _extract_text(response) -> str | None:
+    try:
+        return response.choices[0].message.content
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return None
+
+
+async def run_agent_loop(
+    prompt: str,
+    messages: list[dict],
+    connectors: list[str],
+    connector_manager: MCPConnectorManager | None = None,
+    call_tier_fn=call_tier,
+    select_tier_fn=select_tier,
+) -> dict:
+    """
+    select_tier_fn defaults to the real RouteLLM-backed select_tier, which
+    is NOT wired to a live classifier in this build (see router.py) and
+    will raise NotImplementedError if called for real here. It's
+    injectable so this loop's own mechanics (tool-call handling, safety
+    caps, connector permission checks) can still be tested without a
+    live trained router -- this does not reinvent or substitute for
+    RouteLLM, it isolates what this file is responsible for from what
+    router.py is responsible for.
+    """
+    result = AgentRunResult()
+    connector_manager = connector_manager or MCPConnectorManager()
+
+    conversation = list(messages)
+    start_time = time.monotonic()
+
+    for iteration in range(MAX_AGENT_ITERATIONS):
+        if time.monotonic() - start_time > MAX_AGENT_RUNTIME_SECONDS:
+            result.stopped_reason = "max_runtime_exceeded"
+            break
+
+        tier = await select_tier_fn(prompt)
+        result.tiers_used.append(tier)
+
+        response = await call_tier_fn(tier, conversation)
+        tool_calls = _extract_tool_calls(response)
+
+        if not tool_calls:
+            result.final_message = _extract_text(response)
+            result.stopped_reason = "model_completed"
+            result.steps.append({
+                "iteration": iteration,
+                "tier": tier,
+                "action": "final_answer",
+                "output": result.final_message,
+            })
+            break
+
+        for call in tool_calls:
+            connector_name = call["name"].split("__")[0] if "__" in call["name"] else call["name"]
+            tool_name = call["name"].split("__")[1] if "__" in call["name"] else call["name"]
+
+            if connector_name not in connectors:
+                tool_output = f"error: connector '{connector_name}' not connected for this user"
+            else:
+                try:
+                    tool_result = await connector_manager.call_tool(
+                        connector_name, tool_name, call["arguments"]
+                    )
+                    tool_output = str(tool_result)
+                except Exception as exc:
+                    tool_output = f"error: {exc}"
+
+            result.steps.append({
+                "iteration": iteration,
+                "tier": tier,
+                "action": "tool_call",
+                "tool": call["name"],
+                "arguments": call["arguments"],
+                "output": tool_output,
+            })
+            conversation.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": tool_output,
+            })
+    else:
+        result.stopped_reason = "max_iterations_reached"
+
+    return result.to_dict()

@@ -1,0 +1,10 @@
+myenv/
+app/.env
+app/tests/
+app/__pycache__/
+app/data/__pycache__/
+app/connectors/__pycache__/
+app/queue/__pycache__/
+app/core/__pycache__/
+app/api/__pycache__/
+

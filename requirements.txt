@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+litellm
+celery
+redis
+supabase
+mcp
+httpx
