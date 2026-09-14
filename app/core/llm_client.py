@@ -12,14 +12,12 @@ async def call_tier(tier: str, messages: list[dict], **kwargs) -> dict:
     only config.get_tier_config()'s output changes.
     """
     cfg = get_tier_config(tier)
-    api_key = os.getenv(cfg["api_key_env"], "")
-
-    response = await litellm.acompletion(
+    api_key = os.environ.get(cfg["OPENROUTER_API_KEY"], "")
+    if not api_key:
+        raise ValueError(f"OPENROUTER_API_KEY is not set for tier {tier}")
+    return await litellm.acompletion(
         model=cfg["model"],
-        api_base=cfg["api_base"],
         api_key=api_key,
         messages=messages,
-        timeout=kwargs.pop("timeout", 60),
         **kwargs,
     )
-    return response
