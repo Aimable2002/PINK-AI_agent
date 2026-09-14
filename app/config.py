@@ -1,5 +1,12 @@
 import os
+from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).with_name(".env"))
 
 
 def _get_mode() -> str:
@@ -12,12 +19,6 @@ def _get_mode() -> str:
 MODE = _get_mode()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
-# Model choices below reflect the recommendation discussed: Qwen3.6 (small),
-# DeepSeek V4 Flash (medium), GLM-5.2 (best) -- current strongest
-# open-weight options as of this build. VERIFY exact OpenRouter slug
-# strings against https://openrouter.ai/models before deploying --
-# slugs shift as providers publish new listings, and these have not
-# been confirmed against a live OpenRouter account in this environment.
 
 TIER_CONFIGS = {
     "dev": {
@@ -71,7 +72,22 @@ TIER_THRESHOLDS = {
     "medium_to_best": float(os.environ.get("THRESH_MEDIUM_BEST", "0.7")),
 }
 
-REDIS_URL = os.environ.get("REDIS_URL")
+
+def _normalize_redis_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme != "rediss":
+        return url
+
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key == "ssl_cert_reqs" for key, _ in query):
+        query.append(("ssl_cert_reqs", "CERT_REQUIRED"))
+
+    return urlunsplit(parsed._replace(query=urlencode(query)))
+
+
+REDIS_URL = _normalize_redis_url(
+    os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
