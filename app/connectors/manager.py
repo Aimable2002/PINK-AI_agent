@@ -20,6 +20,8 @@ local or remote:
     Linear's hosted MCP, most GitHub-hosted MCP servers).
 """
 
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -28,6 +30,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+
+from app.data.supabase_client import get_client
 
 _VALID_TRANSPORTS = ("stdio", "sse", "http")
 
@@ -44,6 +48,7 @@ class ConnectorConfig:
     # sse/http-only
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    scopes: dict[str, bool] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.transport not in _VALID_TRANSPORTS:
@@ -56,6 +61,13 @@ class ConnectorConfig:
         if self.transport in ("sse", "http") and not self.url:
             raise ValueError(f"Connector '{self.name}' uses {self.transport} but has no url set.")
 
+    @property
+    def normalized_scopes(self) -> dict[str, bool]:
+        return {
+            key.strip().lower(): bool(value)
+            for key, value in (self.scopes or {}).items()
+        }
+
 
 class MCPConnectorManager:
     def __init__(self):
@@ -66,6 +78,64 @@ class MCPConnectorManager:
 
     def is_registered(self, name: str) -> bool:
         return name in self._connectors
+
+    def _scope_tokens(self, scope_name: str) -> set[str]:
+        return {
+            token.strip().lower()
+            for token in scope_name.replace("/", ".").replace("_", ".").replace("-", ".").split(".")
+            if token.strip()
+        }
+
+    def tool_scope_allowed(self, connector_name: str, tool_name: str) -> tuple[bool, str | None]:
+        cfg = self._connectors.get(connector_name)
+        if not cfg or not cfg.scopes:
+            return True, None
+
+        denied = [scope_name for scope_name, allowed in cfg.normalized_scopes.items() if not allowed]
+        if not denied:
+            return True, None
+
+        tool_tokens = self._scope_tokens(tool_name)
+        normalized_tool = tool_name.lower().replace("__", ".").replace("_", ".").replace("-", ".")
+        for scope_name in denied:
+            scope_tokens = self._scope_tokens(scope_name)
+            if scope_tokens and (scope_tokens & tool_tokens or scope_name in normalized_tool):
+                return False, scope_name
+        return True, None
+
+    async def load_user_connectors(self, user_id: str) -> list[str]:
+        """Load the active connector rows tied to a user and register each one."""
+        client = get_client()
+        resp = (
+            client.table("mcp_connections")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = resp.data or []
+
+        registered: list[str] = []
+        for row in rows:
+            connector_name = row.get("name") or row.get("connector_name")
+            if not connector_name:
+                continue
+
+            url = row.get("default_server_url") or row.get("url") or row.get("server_url")
+            transport = row.get("transport") or "http"
+            headers = row.get("headers") or {}
+            scopes = row.get("scopes") or {}
+
+            cfg = ConnectorConfig(
+                name=str(connector_name),
+                transport=str(transport),
+                url=url,
+                headers={str(k): str(v) for k, v in (headers or {}).items()},
+                scopes={str(k): bool(v) for k, v in (scopes or {}).items()},
+            )
+            self.register(cfg)
+            registered.append(str(connector_name))
+
+        return registered
 
     @asynccontextmanager
     async def session(self, connector_name: str):
@@ -101,7 +171,7 @@ class MCPConnectorManager:
             finally:
                 await http_client.aclose()
 
-        else: 
+        else:
             raise ValueError(f"Unhandled transport '{cfg.transport}'")
 
     async def list_tools(self, connector_name: str) -> list[str]:

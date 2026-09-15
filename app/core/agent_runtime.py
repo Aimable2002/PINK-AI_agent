@@ -15,7 +15,7 @@ import json
 import time
 
 from app.config import MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS
-from app.core.llm_client import call_tier
+from app.core.llm_client import call_tier, get_default_tools, web_search
 from app.connectors.manager import MCPConnectorManager
 from app.core.router import select_tier
 
@@ -90,9 +90,9 @@ async def run_agent_loop(
     connector_manager = connector_manager or MCPConnectorManager()
 
     conversation = list(messages)
-    tools = []
-    if mode == "agent":
-        for connector_name in connectors:
+    tools = get_default_tools(mode)
+    for connector_name in connectors:
+        if connector_name in connector_manager._connectors:
             tools.extend(await connector_manager.list_tool_schemas(connector_name))
 
     start_time = time.monotonic()
@@ -105,9 +105,9 @@ async def run_agent_loop(
         tier = await select_tier_fn(prompt)
         result.tiers_used.append(tier)
 
-        call_kwargs = {"tools": tools} if mode == "agent" and tools else {}
+        call_kwargs = {"tools": tools} if tools else {}
         response = await call_tier_fn(tier, conversation, **call_kwargs)
-        tool_calls = _extract_tool_calls(response) if mode == "agent" else []
+        tool_calls = _extract_tool_calls(response) if tools else []
 
         if not tool_calls:
             result.final_message = _extract_text(response)
@@ -141,22 +141,39 @@ async def run_agent_loop(
         })
 
         for call in tool_calls:
-            connector_name = call["name"].split("__")[0] if "__" in call["name"] else call["name"]
-            tool_name = call["name"].split("__")[1] if "__" in call["name"] else call["name"]
+            call_name = call["name"]
+            connector_name = call_name.split("__")[0] if "__" in call_name else None
+            tool_name = call_name.split("__")[1] if "__" in call_name else call_name
 
-            if connector_name not in connectors:
-                tool_output = f"error: connector '{connector_name}' not connected for this user"
-            else:
+            if call_name == "web_search":
                 try:
                     arguments = call["arguments"]
                     if isinstance(arguments, str):
                         arguments = json.loads(arguments)
-                    tool_result = await connector_manager.call_tool(
-                        connector_name, tool_name, arguments
-                    )
-                    tool_output = str(tool_result)
+                    tool_output = await web_search(arguments.get("query", ""))
                 except Exception as exc:
                     tool_output = f"error: {exc}"
+            elif connector_name is not None and connector_name in connectors:
+                allowed, denied_scope = connector_manager.tool_scope_allowed(connector_name, tool_name)
+                if not allowed:
+                    tool_output = (
+                        f"error: tool '{tool_name}' blocked by scope '{denied_scope}' for connector '{connector_name}'"
+                    )
+                else:
+                    try:
+                        arguments = call["arguments"]
+                        if isinstance(arguments, str):
+                            arguments = json.loads(arguments)
+                        tool_result = await connector_manager.call_tool(
+                            connector_name, tool_name, arguments
+                        )
+                        tool_output = str(tool_result)
+                    except Exception as exc:
+                        tool_output = f"error: {exc}"
+            elif connector_name is not None:
+                tool_output = f"error: connector '{connector_name}' not connected for this user"
+            else:
+                tool_output = f"error: unknown tool '{call_name}'"
 
             result.steps.append({
                 "iteration": iteration,
