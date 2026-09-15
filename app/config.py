@@ -94,6 +94,7 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 MAX_AGENT_ITERATIONS = int(os.environ.get("MAX_AGENT_ITERATIONS", "10"))
 MAX_AGENT_RUNTIME_SECONDS = int(os.environ.get("MAX_AGENT_RUNTIME_SECONDS", "600"))
+FREE_QUEUE_MAX_DEPTH = int(os.environ.get("FREE_QUEUE_MAX_DEPTH", "50"))
 
 
 def get_tier_config(tier: str) -> dict:

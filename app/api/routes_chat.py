@@ -2,8 +2,9 @@ from fastapi import APIRouter, HTTPException, Depends
 
 from app.api.schemas import ChatRequest
 from app.api.dependencies import get_current_user
+from app.config import FREE_QUEUE_MAX_DEPTH
 from app.data.supabase_client import UserContext
-from app.queue.celery_app import celery_app
+from app.queue.celery_app import celery_app, get_queue_depth
 from app.queue.tasks import run_free_job, run_paid_job
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -19,8 +20,16 @@ async def chat(payload: ChatRequest, user: UserContext = Depends(get_current_use
     if user.plan == "paid":
         job = run_paid_job.apply_async(args=args, queue="paid_priority")
     else:
-        # TODO: check free_standard queue depth here and return 429 if the
-        # backlog exceeds a threshold, instead of enqueueing unbounded.
+        depth = get_queue_depth("free_standard")
+        if depth >= FREE_QUEUE_MAX_DEPTH:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Free tier is at capacity ({depth} jobs queued). "
+                    "Please try again shortly, or upgrade to the paid tier "
+                    "for priority processing."
+                ),
+            )
         job = run_free_job.apply_async(args=args, queue="free_standard")
 
     return {"job_id": job.id, "status": "queued", "plan": user.plan}
