@@ -11,6 +11,7 @@ backstop (max iterations / max runtime) that prevents a runaway loop from
 consuming unbounded compute if the model never converges on its own.
 """
 
+import json
 import time
 
 from app.config import MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS
@@ -70,6 +71,7 @@ async def run_agent_loop(
     connector_manager: MCPConnectorManager | None = None,
     call_tier_fn=call_tier,
     select_tier_fn=select_tier,
+    mode: str = "chat",
 ) -> dict:
     """
     select_tier_fn defaults to the real RouteLLM-backed select_tier, which
@@ -81,10 +83,18 @@ async def run_agent_loop(
     RouteLLM, it isolates what this file is responsible for from what
     router.py is responsible for.
     """
+    if mode not in ("chat", "agent"):
+        raise ValueError(f"Unknown mode: {mode!r}")
+
     result = AgentRunResult()
     connector_manager = connector_manager or MCPConnectorManager()
 
     conversation = list(messages)
+    tools = []
+    if mode == "agent":
+        for connector_name in connectors:
+            tools.extend(await connector_manager.list_tool_schemas(connector_name))
+
     start_time = time.monotonic()
 
     for iteration in range(MAX_AGENT_ITERATIONS):
@@ -95,8 +105,9 @@ async def run_agent_loop(
         tier = await select_tier_fn(prompt)
         result.tiers_used.append(tier)
 
-        response = await call_tier_fn(tier, conversation)
-        tool_calls = _extract_tool_calls(response)
+        call_kwargs = {"tools": tools} if mode == "agent" and tools else {}
+        response = await call_tier_fn(tier, conversation, **call_kwargs)
+        tool_calls = _extract_tool_calls(response) if mode == "agent" else []
 
         if not tool_calls:
             result.final_message = _extract_text(response)
@@ -109,6 +120,26 @@ async def run_agent_loop(
             })
             break
 
+        conversation.append({
+            "role": "assistant",
+            "content": _extract_text(response),
+            "tool_calls": [
+                {
+                    "id": call["id"],
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": (
+                            call["arguments"]
+                            if isinstance(call["arguments"], str)
+                            else json.dumps(call["arguments"])
+                        ),
+                    },
+                }
+                for call in tool_calls
+            ],
+        })
+
         for call in tool_calls:
             connector_name = call["name"].split("__")[0] if "__" in call["name"] else call["name"]
             tool_name = call["name"].split("__")[1] if "__" in call["name"] else call["name"]
@@ -117,8 +148,11 @@ async def run_agent_loop(
                 tool_output = f"error: connector '{connector_name}' not connected for this user"
             else:
                 try:
+                    arguments = call["arguments"]
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
                     tool_result = await connector_manager.call_tool(
-                        connector_name, tool_name, call["arguments"]
+                        connector_name, tool_name, arguments
                     )
                     tool_output = str(tool_result)
                 except Exception as exc:

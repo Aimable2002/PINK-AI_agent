@@ -12,14 +12,17 @@ async def call_tier(tier: str, messages: list[dict], **kwargs) -> dict:
     only config.get_tier_config()'s output changes.
     """
     cfg = get_tier_config(tier)
-    api_key = os.getenv(cfg["api_key_env"], "")
+    api_key = os.environ.get(cfg["api_key_env"], "")
 
-    response = await litellm.acompletion(
-        model=cfg["model"],
-        api_base=cfg["api_base"],
-        api_key=api_key,
-        messages=messages,
-        timeout=kwargs.pop("timeout", 60),
+    request_kwargs = {
+        "model": cfg["model"],
+        "api_key": api_key,
+        "messages": messages,
+        "timeout": kwargs.pop("timeout", 60),
         **kwargs,
-    )
+    }
+    if cfg.get("api_base"):
+        request_kwargs["api_base"] = cfg["api_base"]
+
+    response = await litellm.acompletion(**request_kwargs)
     return response

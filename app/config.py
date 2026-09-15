@@ -23,44 +23,44 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 TIER_CONFIGS = {
     "dev": {
         "classifier": {
-            "model": "inclusionai/ling-3.0-flash-vl:free",
+            "model": "openrouter/inclusionai/ling-3.0-flash-vl:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "small": {
-            "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "medium": {
-            "model": "nex-agi/nex-n2.5-pro:free",
+            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "best": {
-            "model": "poolside/laguna-s-2.1:free",
+            "model": "openrouter/poolside/laguna-s-2.1:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
     },
     "prod": {
         "classifier": {
-            "model": "hosted/qwen3.6-4b",
+            "model": "openai/qwen3.6-4b",
             "api_base_env": "RUNPOD_CLASSIFIER_URL",
             "api_key_env": "RUNPOD_CLASSIFIER_KEY",
         },
         "small": {
-            "model": "hosted/qwen3.6-4b",
+            "model": "openai/qwen3.6-4b",
             "api_base_env": "RUNPOD_SMALL_URL",
             "api_key_env": "RUNPOD_SMALL_KEY",
         },
         "medium": {
-            "model": "hosted/deepseek-v4-flash",
+            "model": "openai/deepseek-v4-flash",
             "api_base_env": "RUNPOD_MEDIUM_URL",
             "api_key_env": "RUNPOD_MEDIUM_KEY",
         },
         "best": {
-            "model": "hosted/glm-5.2",
+            "model": "openai/glm-5.2",
             "api_base_env": "RUNPOD_BEST_URL",
             "api_key_env": "RUNPOD_BEST_KEY",
         },

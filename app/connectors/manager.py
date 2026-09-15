@@ -109,6 +109,21 @@ class MCPConnectorManager:
             result = await session.list_tools()
             return [tool.name for tool in result.tools]
 
+    async def list_tool_schemas(self, connector_name: str) -> list[dict]:
+        async with self.session(connector_name) as session:
+            result = await session.list_tools()
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f"{connector_name}__{tool.name}",
+                        "description": tool.description or "",
+                        "parameters": tool.inputSchema,
+                    },
+                }
+                for tool in result.tools
+            ]
+
     async def call_tool(self, connector_name: str, tool_name: str, arguments: dict):
         async with self.session(connector_name) as session:
             result = await session.call_tool(tool_name, arguments)

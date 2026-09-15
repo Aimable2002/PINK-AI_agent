@@ -15,7 +15,7 @@ async def chat(payload: ChatRequest, user: UserContext = Depends(get_current_use
     if user.quota_exceeded:
         raise HTTPException(status_code=429, detail="Quota exceeded for current plan")
 
-    args = [payload.prompt, payload.messages, payload.connectors]
+    args = [payload.prompt, payload.messages, payload.connectors, payload.mode]
 
     if user.plan == "paid":
         job = run_paid_job.apply_async(args=args, queue="paid_priority")
