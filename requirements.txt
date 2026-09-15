@@ -4,7 +4,7 @@ pydantic
 pydantic-settings
 python-dotenv
 litellm
-celery
+celery==5.6.3
 redis
 supabase
 mcp
