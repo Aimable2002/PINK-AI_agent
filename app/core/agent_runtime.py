@@ -91,7 +91,7 @@ async def run_agent_loop(
     result = AgentRunResult()
     connector_manager = connector_manager or MCPConnectorManager()
 
-    conversation = list(messages)
+    conversation = list(messages) +  [{"role": "user", "content", : prompt}]
     tools = get_default_tools(mode)
     tools.extend(get_native_tool_schemas(connectors))
     for connector_name in connectors:
