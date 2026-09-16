@@ -227,7 +227,7 @@ class MCPConnectorManager:
                     "function": {
                         "name": f"{connector_name}__{tool.name}",
                         "description": tool.description or "",
-                        "parameters": tool.inputSchema,
+                        "parameters": getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None),
                     },
                 }
                 for tool in result.tools
