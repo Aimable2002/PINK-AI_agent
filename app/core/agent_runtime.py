@@ -91,7 +91,7 @@ async def run_agent_loop(
     result = AgentRunResult()
     connector_manager = connector_manager or MCPConnectorManager()
 
-    conversation = list(messages) +  [{"role": "user", "content", : prompt}]
+    conversation = list(messages) +  [{"role": "user", "content": prompt}]
     tools = get_default_tools(mode)
     tools.extend(get_native_tool_schemas(connectors))
     for connector_name in connectors:
@@ -109,7 +109,10 @@ async def run_agent_loop(
         result.tiers_used.append(tier)
 
         call_kwargs = {"tools": tools} if tools else {}
-        response = await call_tier_fn(tier, conversation, **call_kwargs)
+        try:
+            response = await call_tier_fn(tier, conversation, **call_kwargs)
+        except Exception as exc:
+            tool_output = f"error: {exc}"
         tool_calls = _extract_tool_calls(response) if tools else []
 
         if not tool_calls:

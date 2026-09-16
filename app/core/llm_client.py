@@ -12,7 +12,24 @@ def get_default_tools(mode: str | None = None) -> list[dict]:
     requested_mode = (mode or MODE).lower()
     active_mode = MODE.lower() if requested_mode in {"chat", "agent"} else requested_mode
     if active_mode == "dev":
-        return [{"type": "openrouter:web_search"}]
+        # return [{"type": "openrouter:web_search"}]
+        return [{
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for current information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The exact search query to run.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            },
+        }]
 
     if active_mode == "prod":
         return [{
