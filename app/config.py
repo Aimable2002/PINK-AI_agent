@@ -96,6 +96,14 @@ MAX_AGENT_ITERATIONS = int(os.environ.get("MAX_AGENT_ITERATIONS", "10"))
 MAX_AGENT_RUNTIME_SECONDS = int(os.environ.get("MAX_AGENT_RUNTIME_SECONDS", "600"))
 FREE_QUEUE_MAX_DEPTH = int(os.environ.get("FREE_QUEUE_MAX_DEPTH", "50"))
 
+TELEGRAM_API_ID = int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
+TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
+TELEGRAM_SESSION_ENCRYPTION_KEY = os.environ.get("TELEGRAM_SESSION_ENCRYPTION_KEY", "")
+
+WHATSAPP_GRAPH_API_VERSION = os.environ.get("WHATSAPP_GRAPH_API_VERSION", "v21.0")
+WHATSAPP_DEFAULT_TEMPLATE_NAME = os.environ.get("WHATSAPP_DEFAULT_TEMPLATE_NAME", "hello_world")
+WHATSAPP_DEFAULT_TEMPLATE_LANG = os.environ.get("WHATSAPP_DEFAULT_TEMPLATE_LANG", "en_US")
+
 
 def get_tier_config(tier: str) -> dict:
     if tier not in ("classifier", "small", "medium", "best"):

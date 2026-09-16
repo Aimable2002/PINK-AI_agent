@@ -2,6 +2,7 @@ import asyncio
 
 from app.queue.celery_app import celery_app
 from app.core.agent_runtime import run_agent_loop
+from app.connectors.manager import MCPConnectorManager
 
 
 def _run(
@@ -9,8 +10,22 @@ def _run(
     messages: list[dict],
     connectors: list[str] | None = None,
     mode: str = "chat",
+    user_id: str | None = None,
 ) -> dict:
-    return asyncio.run(run_agent_loop(prompt, messages, connectors or [], mode=mode))
+    async def _go() -> dict:
+        manager = MCPConnectorManager()
+        if user_id:
+            await manager.load_user_connectors(user_id)
+        return await run_agent_loop(
+            prompt,
+            messages,
+            connectors or [],
+            connector_manager=manager,
+            mode=mode,
+            user_id=user_id,
+        )
+
+    return asyncio.run(_go())
 
 
 @celery_app.task(name="app.queue.tasks.run_paid_job", bind=True, max_retries=2)
@@ -20,9 +35,10 @@ def run_paid_job(
     messages: list[dict],
     connectors: list[str] | None = None,
     mode: str = "chat",
+    user_id: str | None = None,
 ):
     try:
-        return _run(prompt, messages, connectors, mode)
+        return _run(prompt, messages, connectors, mode, user_id)
     except Exception as exc:
         raise self.retry(exc=exc, countdown=2)
 
@@ -34,9 +50,10 @@ def run_free_job(
     messages: list[dict],
     connectors: list[str] | None = None,
     mode: str = "chat",
+    user_id: str | None = None,
 ):
     try:
-        return _run(prompt, messages, connectors, mode)
+        return _run(prompt, messages, connectors, mode, user_id)
     except Exception as exc:
         raise self.retry(exc=exc, countdown=5)
 

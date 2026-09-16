@@ -17,6 +17,7 @@ import time
 from app.config import MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS
 from app.core.llm_client import call_tier, get_default_tools, web_search
 from app.connectors.manager import MCPConnectorManager
+from app.connectors.native_tools import NATIVE_CONNECTOR_IDS, call_native_tool, get_native_tool_schemas
 from app.core.router import select_tier
 
 
@@ -72,6 +73,7 @@ async def run_agent_loop(
     call_tier_fn=call_tier,
     select_tier_fn=select_tier,
     mode: str = "chat",
+    user_id: str | None = None,
 ) -> dict:
     """
     select_tier_fn defaults to the real RouteLLM-backed select_tier, which
@@ -91,6 +93,7 @@ async def run_agent_loop(
 
     conversation = list(messages)
     tools = get_default_tools(mode)
+    tools.extend(get_native_tool_schemas(connectors))
     for connector_name in connectors:
         if connector_name in connector_manager._connectors:
             tools.extend(await connector_manager.list_tool_schemas(connector_name))
@@ -153,7 +156,18 @@ async def run_agent_loop(
                     tool_output = await web_search(arguments.get("query", ""))
                 except Exception as exc:
                     tool_output = f"error: {exc}"
-            elif connector_name is not None and connector_name in connectors:
+            elif call_name in ("telegram_send_message", "telegram_list_chats", "whatsapp_send_alert"):
+                if not user_id:
+                    tool_output = "error: no authenticated user for this native tool call"
+                else:
+                    try:
+                        arguments = call["arguments"]
+                        if isinstance(arguments, str):
+                            arguments = json.loads(arguments)
+                        tool_output = await call_native_tool(user_id, call_name, arguments)
+                    except Exception as exc:
+                        tool_output = f"error: {exc}"
+            elif connector_name is not None and connector_name in connectors and connector_name not in NATIVE_CONNECTOR_IDS:
                 allowed, denied_scope = connector_manager.tool_scope_allowed(connector_name, tool_name)
                 if not allowed:
                     tool_output = (

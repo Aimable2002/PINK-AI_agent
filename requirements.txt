@@ -9,3 +9,5 @@ redis
 supabase
 mcp
 httpx
+telethon
+cryptography

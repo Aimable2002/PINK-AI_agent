@@ -103,35 +103,74 @@ class MCPConnectorManager:
                 return False, scope_name
         return True, None
 
+    # Connectors that are real product features but are NOT MCP servers --
+    # they have no url/transport to register here at all. They're handled
+    # entirely by app/connectors/native_tools.py against their own tables
+    # (telegram_sessions, whatsapp_credentials), never through this manager.
+    NATIVE_CONNECTOR_IDS = frozenset({"telegram", "whatsapp"})
+
     async def load_user_connectors(self, user_id: str) -> list[str]:
-        """Load the active connector rows tied to a user and register each one."""
+        """
+        Load the active connector rows tied to a user and register each one.
+
+        Field mapping matches the real `mcp_connections` schema (see
+        db/001_init.sql in the frontend repo) -- not a guessed shape:
+          - the connector identifier column is `connector_id`, not `name`
+          - there is no `headers` column; the bearer header is assembled
+            from `auth_header_name` + `auth_token`
+          - `scopes` is stored as a jsonb ARRAY of
+            {"key","label","granted"} objects, not a {scope: bool} dict
+        """
         client = get_client()
         resp = (
             client.table("mcp_connections")
             .select("*")
             .eq("user_id", user_id)
+            .eq("status", "connected")
             .execute()
         )
         rows = resp.data or []
 
         registered: list[str] = []
         for row in rows:
-            connector_name = row.get("name") or row.get("connector_name")
-            if not connector_name:
+            connector_name = row.get("connector_id")
+            if not connector_name or connector_name in self.NATIVE_CONNECTOR_IDS:
                 continue
 
-            url = row.get("default_server_url") or row.get("url") or row.get("server_url")
+            url = row.get("server_url")
             transport = row.get("transport") or "http"
-            headers = row.get("headers") or {}
-            scopes = row.get("scopes") or {}
 
-            cfg = ConnectorConfig(
-                name=str(connector_name),
-                transport=str(transport),
-                url=url,
-                headers={str(k): str(v) for k, v in (headers or {}).items()},
-                scopes={str(k): bool(v) for k, v in (scopes or {}).items()},
-            )
+            headers: dict[str, str] = {}
+            auth_token = row.get("auth_token")
+            if auth_token:
+                header_name = row.get("auth_header_name") or "Authorization"
+                value = str(auth_token)
+                if header_name == "Authorization" and not value.lower().startswith("bearer "):
+                    value = f"Bearer {value}"
+                headers[str(header_name)] = value
+
+            scopes_list = row.get("scopes") or []
+            scopes = {
+                str(item.get("key")): bool(item.get("granted"))
+                for item in scopes_list
+                if isinstance(item, dict) and item.get("key")
+            }
+
+            try:
+                cfg = ConnectorConfig(
+                    name=str(connector_name),
+                    transport=str(transport),
+                    url=url,
+                    command=row.get("command"),
+                    args=list(row.get("args") or []),
+                    headers=headers,
+                    scopes=scopes,
+                )
+            except ValueError:
+                # Misconfigured row (e.g. missing url/command) -- skip it
+                # rather than let one bad connection break every other one.
+                continue
+
             self.register(cfg)
             registered.append(str(connector_name))
 
