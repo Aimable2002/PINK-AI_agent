@@ -112,7 +112,16 @@ async def run_agent_loop(
         try:
             response = await call_tier_fn(tier, conversation, **call_kwargs)
         except Exception as exc:
-            tool_output = f"error: {exc}"
+            result.final_message = f"error: {exc}"
+            result.stopped_reason = "llm_call_failed"
+            result.steps.append({
+                "iteration": iteration,
+                "tier": tier,
+                "action": "llm_call_error",
+                "output": str(exc),
+            })
+            break
+
         tool_calls = _extract_tool_calls(response) if tools else []
 
         if not tool_calls:
