@@ -64,7 +64,10 @@ def _finish(job_id: str, user_id: str, result: dict) -> dict:
             user_id,
             tiers[-1],
             task_id=task.get("id") if task else None,
-            tool_calls=sum(step.get("action") == "tool_call" for step in result.get("steps", [])),
+            tool_calls=sum(
+                step.get("connector") != "agent"
+                for step in result.get("steps", [])
+            ),
         )
     return result
 

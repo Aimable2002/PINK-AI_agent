@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends
 
-from app.api.schemas import ChatRequest
+from app.api.schemas import (
+    ChatQueuedResponse,
+    ChatRequest,
+    ChatStatusResponse,
+)
 from app.api.dependencies import get_current_user
 from app.config import FREE_QUEUE_MAX_DEPTH
 from app.data.supabase_client import (
@@ -14,7 +18,7 @@ from app.queue.tasks import run_free_job, run_paid_job
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 
-@router.post("/chat")
+@router.post("/chat", response_model=ChatQueuedResponse)
 async def chat(payload: ChatRequest, user: UserContext = Depends(get_current_user)):
     if user.quota_exceeded:
         raise HTTPException(status_code=429, detail="Quota exceeded for current plan")
@@ -39,7 +43,7 @@ async def chat(payload: ChatRequest, user: UserContext = Depends(get_current_use
     return {"job_id": job.id, "status": "queued", "plan": user.plan}
 
 
-@router.get("/chat/{job_id}")
+@router.get("/chat/{job_id}", response_model=ChatStatusResponse)
 async def chat_result(job_id: str, user: UserContext = Depends(get_current_user)):
     task = get_task_by_job_id(job_id)
     if task and task["user_id"] != user.user_id:
@@ -61,7 +65,7 @@ async def chat_result(job_id: str, user: UserContext = Depends(get_current_user)
     return {"status": result.state}
 
 
-@router.post("/chat/{job_id}/cancel")
+@router.post("/chat/{job_id}/cancel", response_model=ChatStatusResponse)
 async def cancel_chat(job_id: str, user: UserContext = Depends(get_current_user)):
     task = get_task_by_job_id(job_id)
     if not task or task["user_id"] != user.user_id:

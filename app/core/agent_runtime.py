@@ -29,11 +29,13 @@ class AgentRunResult:
         self.tiers_used: list[str] = []
 
     def to_dict(self) -> dict:
+        tier = self.tiers_used[-1] if self.tiers_used else "medium"
         return {
             "steps": self.steps,
             "final_message": self.final_message,
             "stopped_reason": self.stopped_reason,
             "tiers_used": self.tiers_used,
+            "tier": tier,
         }
 
 
@@ -117,8 +119,9 @@ async def run_agent_loop(
             result.steps.append({
                 "iteration": iteration,
                 "tier": tier,
+                "connector": "agent",
                 "action": "llm_call_error",
-                "output": str(exc),
+                "detail": str(exc),
             })
             break
 
@@ -130,8 +133,9 @@ async def run_agent_loop(
             result.steps.append({
                 "iteration": iteration,
                 "tier": tier,
+                "connector": "agent",
                 "action": "final_answer",
-                "output": result.final_message,
+                "detail": result.final_message,
             })
             break
 
@@ -204,10 +208,9 @@ async def run_agent_loop(
             result.steps.append({
                 "iteration": iteration,
                 "tier": tier,
-                "action": "tool_call",
-                "tool": call["name"],
-                "arguments": call["arguments"],
-                "output": tool_output,
+                "connector": connector_name or "agent",
+                "action": tool_name,
+                "detail": tool_output,
             })
             conversation.append({
                 "role": "tool",

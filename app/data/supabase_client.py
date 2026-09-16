@@ -126,7 +126,7 @@ async def get_telegram_session_row(user_id: str) -> dict | None:
         .maybe_single()
         .execute()
     )
-    return resp.data
+    return resp.data if resp else None
 
 
 async def upsert_telegram_session_row(user_id: str, **fields) -> None:

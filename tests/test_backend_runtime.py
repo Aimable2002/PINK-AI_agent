@@ -45,18 +45,20 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
 
         rows = [
             {
-                "name": "github",
+                "connector_id": "github",
                 "transport": "http",
-                "default_server_url": "https://api.githubcopilot.com/mcp/",
-                "headers": {"Authorization": "Bearer token"},
-                "scopes": {"repo.read": True},
+                "server_url": "https://api.githubcopilot.com/mcp/",
+                "auth_token": "token",
+                "auth_header_name": "Authorization",
+                "scopes": [{"key": "repo.read", "granted": True}],
             },
             {
-                "name": "linear",
+                "connector_id": "linear",
                 "transport": "http",
-                "default_server_url": "https://mcp.linear.app/mcp",
-                "headers": {"Authorization": "Bearer token"},
-                "scopes": {"issues.write": True},
+                "server_url": "https://mcp.linear.app/mcp",
+                "auth_token": "token",
+                "auth_header_name": "Authorization",
+                "scopes": [{"key": "issues.write", "granted": True}],
             },
         ]
 
@@ -67,6 +69,11 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertIn("github", manager._connectors)
         self.assertIn("linear", manager._connectors)
         self.assertEqual(manager._connectors["github"].url, "https://api.githubcopilot.com/mcp/")
+        self.assertEqual(
+            manager._connectors["github"].headers,
+            {"Authorization": "Bearer token"},
+        )
+        self.assertEqual(manager._connectors["github"].scopes, {"repo.read": True})
 
     async def test_scope_enforcement_blocks_disallowed_tool(self):
         manager = MCPConnectorManager()
@@ -123,8 +130,9 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(result["stopped_reason"], "model_completed")
+        self.assertEqual(result["tier"], "small")
         self.assertTrue(
-            any("scope" in str(step["output"]).lower() for step in result["steps"]),
+            any("scope" in str(step["detail"]).lower() for step in result["steps"]),
             result["steps"],
         )
 
@@ -132,7 +140,8 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         dev_tools = get_default_tools("dev")
         prod_tools = get_default_tools("prod")
 
-        self.assertEqual(dev_tools, [{"type": "openrouter:web_search"}])
+        self.assertEqual(dev_tools[0]["type"], "function")
+        self.assertEqual(dev_tools[0]["function"]["name"], "web_search")
         self.assertEqual(prod_tools[0]["type"], "function")
         self.assertEqual(prod_tools[0]["function"]["name"], "web_search")
 
