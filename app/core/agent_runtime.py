@@ -14,8 +14,8 @@ consuming unbounded compute if the model never converges on its own.
 import json
 import time
 
-from app.config import MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS
-from app.core.llm_client import call_tier, get_default_tools, web_search
+from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS, TOOL_CALL_CREDIT_SURCHARGE
+from app.core.llm_client import call_tier, extract_usage, get_default_tools, web_search
 from app.connectors.manager import MCPConnectorManager
 from app.connectors.native_tools import NATIVE_CONNECTOR_IDS, call_native_tool, get_native_tool_schemas
 from app.core.router import select_tier
@@ -27,6 +27,12 @@ class AgentRunResult:
         self.final_message: str | None = None
         self.stopped_reason: str | None = None
         self.tiers_used: list[str] = []
+        # Real measured usage, not a flat per-job guess -- see
+        # llm_client.extract_usage(). credits_used is what actually gets
+        # charged against the user's balance; cost_usd is kept alongside
+        # it purely for finance/auditing visibility in usage_events.
+        self.cost_usd: float = 0.0
+        self.credits_used: float = 0.0
 
     def to_dict(self) -> dict:
         tier = self.tiers_used[-1] if self.tiers_used else "medium"
@@ -36,6 +42,8 @@ class AgentRunResult:
             "stopped_reason": self.stopped_reason,
             "tiers_used": self.tiers_used,
             "tier": tier,
+            "cost_usd": round(self.cost_usd, 6),
+            "credits_used": round(self.credits_used, 4),
         }
 
 
@@ -76,6 +84,7 @@ async def run_agent_loop(
     select_tier_fn=select_tier,
     mode: str = "chat",
     user_id: str | None = None,
+    credit_budget: float | None = None,
 ) -> dict:
     """
     select_tier_fn defaults to the real RouteLLM-backed select_tier, which
@@ -86,6 +95,13 @@ async def run_agent_loop(
     live trained router -- this does not reinvent or substitute for
     RouteLLM, it isolates what this file is responsible for from what
     router.py is responsible for.
+
+    credit_budget is the user's remaining balance in credits, fetched
+    once by the caller (see tasks.py) before this loop starts. It is
+    checked before every iteration -- not just once at job start -- so a
+    long tool-calling run stops the moment it exhausts the budget rather
+    than completing on credit it doesn't have. Pass None to run with no
+    budget enforcement (e.g. in tests).
     """
     if mode not in ("chat", "agent"):
         raise ValueError(f"Unknown mode: {mode!r}")
@@ -107,6 +123,19 @@ async def run_agent_loop(
             result.stopped_reason = "max_runtime_exceeded"
             break
 
+        # Checked before every iteration, not just once before the job
+        # started -- a run that had enough credits at iteration 0 can
+        # burn through its whole balance by iteration 4 of a long tool
+        # chain. This is what actually stops the agent "once credits are
+        # finished" mid-run, not just refuses to start a new job.
+        if credit_budget is not None and result.credits_used >= credit_budget:
+            result.stopped_reason = "credits_exhausted"
+            result.final_message = result.final_message or (
+                "Stopped: this run used up the available credits before finishing. "
+                f"({result.credits_used:.2f} credits used)"
+            )
+            break
+
         tier = await select_tier_fn(prompt)
         result.tiers_used.append(tier)
 
@@ -124,6 +153,10 @@ async def run_agent_loop(
                 "detail": str(exc),
             })
             break
+
+        usage = extract_usage(response, tier)
+        result.cost_usd += usage["cost_usd"]
+        result.credits_used += usage["cost_usd"] * CREDITS_PER_USD
 
         tool_calls = _extract_tool_calls(response) if tools else []
 
@@ -205,6 +238,7 @@ async def run_agent_loop(
             else:
                 tool_output = f"error: unknown tool '{call_name}'"
 
+            result.credits_used += TOOL_CALL_CREDIT_SURCHARGE
             result.steps.append({
                 "iteration": iteration,
                 "tier": tier,

@@ -6,6 +6,7 @@ from app.core.agent_runtime import run_agent_loop
 from app.connectors.manager import MCPConnectorManager
 from app.data.supabase_client import (
     get_task_by_job_id,
+    get_user_context,
     record_usage,
     update_task_by_job_id,
 )
@@ -20,8 +21,25 @@ def _run(
 ) -> dict:
     async def _go() -> dict:
         manager = MCPConnectorManager()
+        credit_budget = None
         if user_id:
             await manager.load_user_connectors(user_id)
+            # Remaining balance, not the plan's total -- this is what
+            # actually gets enforced mid-run in run_agent_loop. Fetched
+            # once per job, not per iteration, to avoid a Supabase round
+            # trip on every loop step.
+            try:
+                user = await get_user_context(user_id)
+                credit_budget = max(0.0, float(user.quota_limit - user.quota_used))
+            except Exception:
+                # If the profile lookup itself fails, don't silently run
+                # unmetered -- routes_chat.py already gated on quota
+                # before this job was ever queued, so falling back to
+                # None here (no enforcement) rather than blocking the
+                # job is the deliberate tradeoff: a metering hiccup
+                # shouldn't take down every job, but should never happen
+                # silently -- surfaced via /healthz/deep's supabase check.
+                credit_budget = None
         return await run_agent_loop(
             prompt,
             messages,
@@ -29,6 +47,7 @@ def _run(
             connector_manager=manager,
             mode=mode,
             user_id=user_id,
+            credit_budget=credit_budget,
         )
 
     return asyncio.run(_go())
@@ -60,14 +79,22 @@ def _finish(job_id: str, user_id: str, result: dict) -> dict:
     if user_id:
         tiers = result.get("tiers_used") or ["small"]
         task = get_task_by_job_id(job_id)
+        # This is the actual fix to the flat-rate quota bug: `requests`
+        # used to always be 1 regardless of tier/tool calls/tokens. It
+        # now carries the real measured credit cost of this specific run
+        # (see agent_runtime.AgentRunResult + llm_client.extract_usage),
+        # so a 10-iteration multi-connector run costs proportionally more
+        # than a one-line reply, instead of costing the same "1".
         record_usage(
             user_id,
             tiers[-1],
             task_id=task.get("id") if task else None,
+            requests=max(1, round(result.get("credits_used", 1))),
             tool_calls=sum(
                 step.get("connector") != "agent"
                 for step in result.get("steps", [])
             ),
+            cost_usd=result.get("cost_usd", 0.0),
         )
     return result
 

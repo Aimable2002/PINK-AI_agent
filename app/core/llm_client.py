@@ -4,7 +4,7 @@ import os
 import httpx
 import litellm
 
-from app.config import MODE, get_tier_config
+from app.config import FALLBACK_COST_PER_1K_TOKENS_USD, MODE, get_tier_config
 
 
 def get_default_tools(mode: str | None = None) -> list[dict]:
@@ -103,3 +103,46 @@ async def call_tier(tier: str, messages: list[dict], **kwargs) -> dict:
 
     response = await litellm.acompletion(**request_kwargs)
     return response
+
+
+def extract_usage(response, tier: str) -> dict:
+    """
+    Pull real token counts and real USD cost out of a LiteLLM response.
+    This is the actual metering mechanism for the credit system -- every
+    call already carries this data, it was just never being read.
+
+    litellm.completion_cost() prices the call using litellm's own model
+    cost table when the model is in it (true for hosted providers like
+    OpenRouter's upstream models). For a custom RunPod-hosted model
+    (the whole `prod` MODE), that table has no entry, so completion_cost()
+    raises or silently returns 0 -- caught here and replaced with the
+    configured fallback $/1K-token estimate for that tier, rather than
+    ever letting a call be metered as free.
+    """
+    usage = getattr(response, "usage", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+
+    cost_usd = 0.0
+    priced_by_litellm = False
+    try:
+        computed = litellm.completion_cost(completion_response=response)
+        if computed and computed > 0:
+            cost_usd = float(computed)
+            priced_by_litellm = True
+    except Exception:
+        pass
+
+    if not priced_by_litellm:
+        rate = FALLBACK_COST_PER_1K_TOKENS_USD.get(tier, FALLBACK_COST_PER_1K_TOKENS_USD["medium"])
+        cost_usd = (total_tokens / 1000.0) * rate
+
+    return {
+        "tier": tier,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "cost_usd": round(cost_usd, 6),
+        "priced_by_litellm": priced_by_litellm,
+    }
