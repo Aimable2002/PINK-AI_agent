@@ -28,7 +28,7 @@ TIER_CONFIGS = {
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "small": {
-            "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
