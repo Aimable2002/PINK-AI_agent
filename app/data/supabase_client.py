@@ -59,6 +59,59 @@ async def get_user_context(user_id: str) -> UserContext:
     )
 
 
+def get_task_by_job_id(job_id: str) -> dict | None:
+    client = get_client()
+    response = (
+        client.table("tasks")
+        .select("id, user_id, job_id, status")
+        .eq("job_id", job_id)
+        .maybe_single()
+        .execute()
+    )
+    return response.data
+
+
+def update_task_by_job_id(job_id: str, **fields) -> None:
+    if not fields:
+        return
+    get_client().table("tasks").update(fields).eq("job_id", job_id).execute()
+
+
+def record_usage(
+    user_id: str,
+    tier: str,
+    task_id: str | None = None,
+    requests: int = 1,
+    tool_calls: int = 0,
+    cost_usd: float = 0,
+) -> None:
+    client = get_client()
+    if task_id:
+        existing = (
+            client.table("usage_events")
+            .select("id")
+            .eq("task_id", task_id)
+            .maybe_single()
+            .execute()
+        )
+        if existing.data:
+            return
+    client.rpc(
+        "increment_quota",
+        {"_user_id": user_id, "_requests": requests},
+    ).execute()
+    client.table("usage_events").insert(
+        {
+            "user_id": user_id,
+            "task_id": task_id,
+            "tier": tier,
+            "requests": requests,
+            "tool_calls": tool_calls,
+            "cost_usd": cost_usd,
+        }
+    ).execute()
+
+
 # ------------------------------------------------------------------ telegram
 # telegram_sessions is intentionally its own table, not mcp_connections --
 # a Telethon session doesn't have a url/transport/auth_header shape, it's a

@@ -3,7 +3,11 @@ from fastapi import APIRouter, HTTPException, Depends
 from app.api.schemas import ChatRequest
 from app.api.dependencies import get_current_user
 from app.config import FREE_QUEUE_MAX_DEPTH
-from app.data.supabase_client import UserContext
+from app.data.supabase_client import (
+    UserContext,
+    get_task_by_job_id,
+    update_task_by_job_id,
+)
 from app.queue.celery_app import celery_app, get_queue_depth
 from app.queue.tasks import run_free_job, run_paid_job
 
@@ -37,11 +41,34 @@ async def chat(payload: ChatRequest, user: UserContext = Depends(get_current_use
 
 @router.get("/chat/{job_id}")
 async def chat_result(job_id: str, user: UserContext = Depends(get_current_user)):
+    task = get_task_by_job_id(job_id)
+    if task and task["user_id"] != user.user_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if task and task.get("status") == "cancelled":
+        return {"status": "cancelled"}
+
     result = celery_app.AsyncResult(job_id)
     if result.state == "PENDING":
         return {"status": "pending"}
     if result.state == "FAILURE":
         return {"status": "failed", "error": str(result.result)}
+    if result.state == "REVOKED":
+        return {"status": "cancelled"}
     if result.state == "SUCCESS":
+        if isinstance(result.result, dict) and result.result.get("stopped_reason") == "llm_call_failed":
+            return {"status": "failed", "error": result.result.get("final_message")}
         return {"status": "done", "data": result.result}
     return {"status": result.state}
+
+
+@router.post("/chat/{job_id}/cancel")
+async def cancel_chat(job_id: str, user: UserContext = Depends(get_current_user)):
+    task = get_task_by_job_id(job_id)
+    if not task or task["user_id"] != user.user_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if task.get("status") in ("completed", "failed", "cancelled"):
+        return {"status": task["status"]}
+
+    celery_app.control.revoke(job_id, terminate=True, signal="SIGTERM")
+    update_task_by_job_id(job_id, status="cancelled")
+    return {"status": "cancelled"}
