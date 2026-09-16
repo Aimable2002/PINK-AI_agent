@@ -94,7 +94,7 @@ def record_usage(
             .maybe_single()
             .execute()
         )
-        if existing.data:
+        if existing is not None and existing.data:
             return
     client.rpc(
         "increment_quota",
