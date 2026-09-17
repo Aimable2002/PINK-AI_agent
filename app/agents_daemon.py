@@ -79,10 +79,23 @@ async def _connect_user(service_row: dict) -> None:
         log.warning("could not open Telegram session for user=%s: %s", user_id, exc)
         return
 
+    # Telethon only skips entity resolution for real `int`s (a marked/negative
+    # ID is used as-is). Anything else -- including these numeric strings, as
+    # stored by the frontend -- goes through get_input_entity(), which needs
+    # an access_hash from this connection's own entity cache. That's empty on
+    # a fresh daemon connection, so a bare ID string can't resolve and raises
+    # ValueError. Casting to int avoids needing that lookup at all.
+    try:
+        chat_ids = [int(c) for c in monitored_chats]
+    except (TypeError, ValueError):
+        log.warning("user=%s has a non-numeric monitored chat id in %r, skipping", user_id, monitored_chats)
+        await close_persistent_client(client)
+        return
+
     handler = _make_handler(user_id, service_row)
-    client.add_event_handler(handler, events.NewMessage(chats=monitored_chats))
+    client.add_event_handler(handler, events.NewMessage(chats=chat_ids))
     _live[user_id] = {"client": client, "service_row": service_row, "handler": handler}
-    log.info("listening for user=%s on %d chat(s)", user_id, len(monitored_chats))
+    log.info("listening for user=%s on %d chat(s)", user_id, len(chat_ids))
 
 
 async def _disconnect_user(user_id: str) -> None:
