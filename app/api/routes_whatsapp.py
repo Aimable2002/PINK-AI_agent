@@ -22,15 +22,17 @@ class TestSendRequest(BaseModel):
 
 @router.get("/status")
 async def status(user: UserContext = Depends(get_current_user)):
+    # No row is the normal "not connected yet" state, not an error -- see
+    # get_agent_service's docstring in supabase_client.py for why
+    # .maybe_single() can't be used for that.
     client = get_client()
     resp = (
         client.table("whatsapp_credentials")
         .select("phone_number_id, alert_recipient")
         .eq("user_id", user.user_id)
-        .maybe_single()
         .execute()
     )
-    row = resp.data
+    row = resp.data[0] if resp.data else None
     return {"connected": bool(row), **(row or {})}
 
 

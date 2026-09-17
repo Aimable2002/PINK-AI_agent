@@ -61,15 +61,17 @@ async def get_user_context(user_id: str) -> UserContext:
 
 
 def get_task_by_job_id(job_id: str) -> dict | None:
+    """No row is a normal outcome (unknown/expired job_id), not an error --
+    see get_agent_service's docstring for why .maybe_single() can't be used
+    for that."""
     client = get_client()
     response = (
         client.table("tasks")
         .select("id, user_id, job_id, status")
         .eq("job_id", job_id)
-        .maybe_single()
         .execute()
     )
-    return response.data
+    return response.data[0] if response.data else None
 
 
 def update_task_by_job_id(job_id: str, **fields) -> None:
@@ -88,14 +90,16 @@ def record_usage(
 ) -> None:
     client = get_client()
     if task_id:
+        # No existing row is the common case -- this check runs on every
+        # call, and only finds a match on a retry/duplicate. Plain select,
+        # not .maybe_single() (see get_agent_service's docstring).
         existing = (
             client.table("usage_events")
             .select("id")
             .eq("task_id", task_id)
-            .maybe_single()
             .execute()
         )
-        if existing is not None and existing.data:
+        if existing.data:
             return
     client.rpc(
         "increment_quota",
@@ -119,15 +123,17 @@ def record_usage(
 # single opaque encrypted blob plus login state.
 
 async def get_telegram_session_row(user_id: str) -> dict | None:
+    """No row is normal for a user who hasn't connected Telegram (see
+    get_agent_service's docstring for why .maybe_single() can't be used
+    for that)."""
     client = get_client()
     resp = (
         client.table("telegram_sessions")
         .select("*")
         .eq("user_id", user_id)
-        .maybe_single()
         .execute()
     )
-    return resp.data if resp else None
+    return resp.data[0] if resp.data else None
 
 
 async def upsert_telegram_session_row(user_id: str, **fields) -> None:
@@ -147,15 +153,17 @@ async def delete_telegram_session_row(user_id: str) -> None:
 # number, not a single bearer token against a shared URL.
 
 async def get_whatsapp_credentials_row(user_id: str) -> dict | None:
+    """No row is normal for a user who hasn't connected WhatsApp (see
+    get_agent_service's docstring for why .maybe_single() can't be used
+    for that)."""
     client = get_client()
     resp = (
         client.table("whatsapp_credentials")
         .select("*")
         .eq("user_id", user_id)
-        .maybe_single()
         .execute()
     )
-    return resp.data
+    return resp.data[0] if resp.data else None
 
 
 # ------------------------------------------------------------- agent services
