@@ -179,16 +179,21 @@ def get_active_services(service_id: str) -> list[dict]:
 
 
 async def get_agent_service(user_id: str, service_id: str) -> dict | None:
+    """Row is expected to be absent for a user who has never configured this
+    service -- that's the normal "not configured" state, not an error. Plain
+    select + manual unwrap instead of .maybe_single(): PostgREST returns 406
+    (not 200-with-empty-body) when its object Accept header matches zero
+    rows, which makes postgrest-py raise APIError instead of returning None,
+    even via maybe_single()."""
     client = get_client()
     resp = (
         client.table("user_agent_services")
         .select("*")
         .eq("user_id", user_id)
         .eq("service_id", service_id)
-        .maybe_single()
         .execute()
     )
-    return resp.data
+    return resp.data[0] if resp.data else None
 
 
 async def upsert_agent_service(user_id: str, service_id: str, config: dict, status: str | None = None) -> dict:
