@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from supabase import create_client, Client
 
@@ -155,3 +156,88 @@ async def get_whatsapp_credentials_row(user_id: str) -> dict | None:
         .execute()
     )
     return resp.data
+
+
+# ------------------------------------------------------------- agent services
+# One row per (user, service_id). `config` is opaque to this layer -- each
+# agent module (app/agent_services/<name>.py) owns and validates the shape
+# of its own config; this file just persists whatever dict it's given.
+
+def get_active_services(service_id: str) -> list[dict]:
+    """All users' active rows for one agent service type. Used by the
+    daemon at startup and on its periodic reconciliation pass -- NOT
+    async, since the daemon calls this from a plain sync loop tick."""
+    client = get_client()
+    resp = (
+        client.table("user_agent_services")
+        .select("*")
+        .eq("service_id", service_id)
+        .eq("status", "active")
+        .execute()
+    )
+    return resp.data or []
+
+
+async def get_agent_service(user_id: str, service_id: str) -> dict | None:
+    client = get_client()
+    resp = (
+        client.table("user_agent_services")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("service_id", service_id)
+        .maybe_single()
+        .execute()
+    )
+    return resp.data
+
+
+async def upsert_agent_service(user_id: str, service_id: str, config: dict, status: str | None = None) -> dict:
+    client = get_client()
+    row = {"user_id": user_id, "service_id": service_id, "config": config}
+    if status is not None:
+        row["status"] = status
+    resp = client.table("user_agent_services").upsert(row, on_conflict="user_id,service_id").execute()
+    return (resp.data or [{}])[0]
+
+
+def set_service_status(service_row_id: str, status: str, paused_reason: str | None = None) -> None:
+    """Sync, not async -- called from the daemon's plain asyncio loop and
+    from Celery tasks, neither of which need to await a Supabase client
+    that is itself synchronous under the hood."""
+    client = get_client()
+    fields = {"status": status, "paused_reason": paused_reason, "updated_at": datetime.now(timezone.utc).isoformat()}
+    client.table("user_agent_services").update(fields).eq("id", service_row_id).execute()
+
+
+def touch_service_last_run(service_row_id: str) -> None:
+    client = get_client()
+    client.table("user_agent_services").update(
+        {"last_run_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", service_row_id).execute()
+
+
+# ------------------------------------------------------------------- signals
+
+def insert_signal(
+    user_id: str,
+    agent_service_id: str,
+    channel: str | None,
+    raw_text: str,
+    source: str = "telegram",
+) -> dict:
+    client = get_client()
+    resp = client.table("signals").insert({
+        "user_id": user_id,
+        "agent_service_id": agent_service_id,
+        "source": source,
+        "channel": channel,
+        "raw_text": raw_text,
+    }).execute()
+    return (resp.data or [{}])[0]
+
+
+def update_signal(signal_id: str, **fields) -> None:
+    if not fields:
+        return
+    client = get_client()
+    client.table("signals").update(fields).eq("id", signal_id).execute()

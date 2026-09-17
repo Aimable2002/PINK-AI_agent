@@ -12,6 +12,38 @@ from app.data.supabase_client import (
 )
 
 
+async def get_remaining_credits(user_id: str) -> float | None:
+    """Shared by chat jobs and agent-service tasks -- both need the same
+    'how much balance is left right now' check before spending any of it."""
+    try:
+        user = await get_user_context(user_id)
+        return max(0.0, float(user.quota_limit - user.quota_used))
+    except Exception:
+        return None
+
+
+def charge_usage(user_id: str, result: dict, task_id: str | None = None) -> None:
+    """
+    The one place that turns an AgentRunResult into a real charge against
+    a user's balance. Used by both chat jobs (_finish, below) and agent-
+    service tasks (app/queue/agent_tasks.py) so a signal-monitor run is
+    metered by the exact same rule as a chat run -- no second, looser
+    accounting path for background-triggered work.
+    """
+    tiers = result.get("tiers_used") or ["small"]
+    record_usage(
+        user_id,
+        tiers[-1],
+        task_id=task_id,
+        requests=max(1, round(result.get("credits_used", 1))),
+        tool_calls=sum(
+            step.get("connector") != "agent"
+            for step in result.get("steps", [])
+        ),
+        cost_usd=result.get("cost_usd", 0.0),
+    )
+
+
 def _run(
     prompt: str,
     messages: list[dict],
@@ -28,18 +60,7 @@ def _run(
             # actually gets enforced mid-run in run_agent_loop. Fetched
             # once per job, not per iteration, to avoid a Supabase round
             # trip on every loop step.
-            try:
-                user = await get_user_context(user_id)
-                credit_budget = max(0.0, float(user.quota_limit - user.quota_used))
-            except Exception:
-                # If the profile lookup itself fails, don't silently run
-                # unmetered -- routes_chat.py already gated on quota
-                # before this job was ever queued, so falling back to
-                # None here (no enforcement) rather than blocking the
-                # job is the deliberate tradeoff: a metering hiccup
-                # shouldn't take down every job, but should never happen
-                # silently -- surfaced via /healthz/deep's supabase check.
-                credit_budget = None
+            credit_budget = await get_remaining_credits(user_id)
         return await run_agent_loop(
             prompt,
             messages,
@@ -77,7 +98,6 @@ def _finish(job_id: str, user_id: str, result: dict) -> dict:
         finished_at=datetime.now(timezone.utc).isoformat(),
     )
     if user_id:
-        tiers = result.get("tiers_used") or ["small"]
         task = get_task_by_job_id(job_id)
         # This is the actual fix to the flat-rate quota bug: `requests`
         # used to always be 1 regardless of tier/tool calls/tokens. It
@@ -85,17 +105,7 @@ def _finish(job_id: str, user_id: str, result: dict) -> dict:
         # (see agent_runtime.AgentRunResult + llm_client.extract_usage),
         # so a 10-iteration multi-connector run costs proportionally more
         # than a one-line reply, instead of costing the same "1".
-        record_usage(
-            user_id,
-            tiers[-1],
-            task_id=task.get("id") if task else None,
-            requests=max(1, round(result.get("credits_used", 1))),
-            tool_calls=sum(
-                step.get("connector") != "agent"
-                for step in result.get("steps", [])
-            ),
-            cost_usd=result.get("cost_usd", 0.0),
-        )
+        charge_usage(user_id, result, task_id=task.get("id") if task else None)
     return result
 
 

@@ -195,6 +195,38 @@ async def get_status(user_id: str) -> dict:
     }
 
 
+async def _open_validated_client(user_id: str) -> TelegramClient:
+    """
+    Shared by both the short-lived (one tool call, then close) and the
+    persistent (daemon listener, stays open) client paths -- the
+    validation (session exists, is connected, is actually still
+    authorized) must be identical either way. Only what happens to the
+    client afterward (close immediately vs. hold it open) differs.
+    """
+    _require_app_credentials()
+    row = await get_telegram_session_row(user_id)
+    if not row or row.get("status") != "connected" or not row.get("encrypted_session"):
+        raise TelegramLoginError("Telegram is not connected for this user.")
+
+    session_string = _decrypt_session(row["encrypted_session"])
+    client = TelegramClient(StringSession(session_string), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    try:
+        await client.connect()
+    except Exception as exc:
+        raise TelegramLoginError(f"Could not open Telegram session: {exc}") from exc
+
+    if not await client.is_user_authorized():
+        # Session died silently (per the roadmap's own liveness warning) --
+        # surface it as a clean reconnect-required error, not a crash.
+        await client.disconnect()
+        await upsert_telegram_session_row(
+            user_id, status="disconnected", last_error="Session expired; reconnect required."
+        )
+        raise TelegramLoginError("Telegram session expired. Please reconnect.")
+
+    return client
+
+
 class _ShortLivedClient:
     """Opens a client from a stored session for one call, then disconnects."""
 
@@ -203,33 +235,30 @@ class _ShortLivedClient:
         self._client: TelegramClient | None = None
 
     async def __aenter__(self) -> TelegramClient:
-        _require_app_credentials()
-        row = await get_telegram_session_row(self.user_id)
-        if not row or row.get("status") != "connected" or not row.get("encrypted_session"):
-            raise TelegramLoginError("Telegram is not connected for this user.")
-
-        session_string = _decrypt_session(row["encrypted_session"])
-        client = TelegramClient(StringSession(session_string), TELEGRAM_API_ID, TELEGRAM_API_HASH)
-        try:
-            await client.connect()
-        except Exception as exc:
-            raise TelegramLoginError(f"Could not open Telegram session: {exc}") from exc
-
-        if not await client.is_user_authorized():
-            # Session died silently (per the roadmap's own liveness warning) --
-            # surface it as a clean reconnect-required error, not a crash.
-            await client.disconnect()
-            await upsert_telegram_session_row(
-                self.user_id, status="disconnected", last_error="Session expired; reconnect required."
-            )
-            raise TelegramLoginError("Telegram session expired. Please reconnect.")
-
-        self._client = client
-        return client
+        self._client = await _open_validated_client(self.user_id)
+        return self._client
 
     async def __aexit__(self, *exc_info) -> None:
         if self._client is not None:
             await self._client.disconnect()
+
+
+async def open_persistent_client(user_id: str) -> TelegramClient:
+    """
+    For the agent-services listener daemon ONLY. Unlike
+    `_ShortLivedClient`, the caller owns the client's lifetime -- it stays
+    open (to receive live events via `client.add_event_handler`) until
+    the caller explicitly calls `close_persistent_client`. Never use this
+    for a one-off tool call; that's what `_ShortLivedClient` is for.
+    """
+    return await _open_validated_client(user_id)
+
+
+async def close_persistent_client(client: TelegramClient) -> None:
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
 
 async def send_message(user_id: str, chat: str, text: str) -> str:

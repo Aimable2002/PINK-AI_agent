@@ -6,13 +6,20 @@ celery_app = Celery(
     "agent_backend",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.queue.tasks"],
+    include=["app.queue.tasks", "app.queue.agent_tasks"],
 )
 
 celery_app.conf.update(
     task_routes={
         "app.queue.tasks.run_paid_job": {"queue": "paid_priority"},
         "app.queue.tasks.run_free_job": {"queue": "free_standard"},
+        # Signal-pipeline tasks ride the existing free queue -- they're
+        # triggered by the daemon, not a paying-tier chat request, so
+        # they don't compete with paid_priority's latency budget. If
+        # signal volume ever grows enough to need its own queue/worker,
+        # this is the one line that changes.
+        "app.queue.agent_tasks.score_signal_job": {"queue": "free_standard"},
+        "app.queue.agent_tasks.send_telegram_alert_job": {"queue": "free_standard"},
     },
     task_acks_late=True,
     worker_prefetch_multiplier=1,
