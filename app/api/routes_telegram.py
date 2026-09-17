@@ -26,6 +26,17 @@ async def status(user: UserContext = Depends(get_current_user)):
     return await telegram_service.get_status(user.user_id)
 
 
+@router.get("/chats")
+async def chats(limit: int = 30, user: UserContext = Depends(get_current_user)):
+    """Backs the monitored-chats picker on the Telegram Signal Monitor
+    config page -- without this the frontend has no way to show the
+    user their own chats/groups/channels to choose from."""
+    try:
+        return {"chats": await telegram_service.list_chats(user.user_id, limit=limit)}
+    except TelegramLoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/start")
 async def start(payload: StartRequest, user: UserContext = Depends(get_current_user)):
     try:
