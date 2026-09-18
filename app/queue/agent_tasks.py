@@ -27,7 +27,7 @@ import asyncio
 from app.agent_services import REGISTRY
 from app.agent_services.base import AgentServicePaused
 from app.connectors import telegram_service
-from app.data.supabase_client import update_signal
+from app.data.supabase_client import insert_signal, update_signal
 from app.queue.celery_app import celery_app
 
 
@@ -37,12 +37,19 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
     if module is None:
         return {"status": "error", "detail": f"unknown service_id '{service_row.get('service_id')}'"}
 
+    # Inserted once, outside the retried block below -- Celery re-runs this
+    # whole function on every retry, and inserting here used to mean a
+    # failed-then-retried attempt left a fresh duplicate row per retry for
+    # the same incoming message.
+    signal_row = insert_signal(user_id, service_row["id"], channel, raw_text)
+
     try:
-        outcome = asyncio.run(module.score_signal(user_id, service_row, channel, raw_text))
+        outcome = asyncio.run(module.score_signal(user_id, service_row, channel, raw_text, signal_row))
     except AgentServicePaused as exc:
         return {"status": "paused", "reason": exc.reason}
     except Exception as exc:
         if self.request.retries >= self.max_retries:
+            update_signal(signal_row["id"], alert_error=str(exc))
             return {"status": "error", "detail": str(exc)}
         raise self.retry(exc=exc, countdown=5)
 

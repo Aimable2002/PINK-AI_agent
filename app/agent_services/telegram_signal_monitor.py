@@ -27,7 +27,7 @@ import re
 from app.agent_services.base import AgentServicePaused
 from app.connectors.manager import MCPConnectorManager
 from app.core.agent_runtime import run_agent_loop
-from app.data.supabase_client import insert_signal, set_service_status, touch_service_last_run, update_signal
+from app.data.supabase_client import set_service_status, touch_service_last_run, update_signal
 
 SERVICE_ID = "telegram-signal-monitor"
 
@@ -69,7 +69,7 @@ need outside context to judge plausibility (e.g. checking whether an asset name 
 a claimed event actually happened), but you are expected to fetch live price/chart data.
 
 Respond with ONLY a single JSON object, no other text, no markdown fences:
-{"is_signal": true|false, "confidence": <integer 0-10>, "reasoning": "<one short sentence>"}
+{{"is_signal": true|false, "confidence": <integer 0-10>, "reasoning": "<one short sentence>"}}
 
 Message:
 ---
@@ -93,15 +93,17 @@ def _parse_scoring_response(text: str, fell_back: bool) -> tuple[bool, int, str]
         return True, confidence, f"(unparsed model response, fell back to confidence={confidence})"
 
 
-async def score_signal(user_id: str, service_row: dict, channel: str | None, raw_text: str) -> dict:
+async def score_signal(user_id: str, service_row: dict, channel: str | None, raw_text: str, signal_row: dict) -> dict:
     """
     The full scoring step for one message that already passed the Layer-1
-    filter. Returns a dict describing what happened (for logging by the
-    caller); raises AgentServicePaused if the user is out of credits,
-    after already pausing the service and recording why.
+    filter. `signal_row` is created once by the caller (score_signal_job),
+    not here -- Celery retries this whole coroutine on failure, and
+    inserting a fresh row on every attempt used to leave duplicate rows
+    for a single incoming message every time scoring failed and retried.
+    Returns a dict describing what happened (for logging by the caller);
+    raises AgentServicePaused if the user is out of credits, after
+    already pausing the service and recording why.
     """
-    signal_row = insert_signal(user_id, service_row["id"], channel, raw_text)
-
     from app.queue.tasks import charge_usage, get_remaining_credits
 
     credit_budget = await get_remaining_credits(user_id)
