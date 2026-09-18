@@ -38,20 +38,16 @@ DEFAULT_CONFIG = {
 }
 
 
-_ACTION_KEYWORDS = re.compile(
-    r"\b(buy|sell|long|short|entry|exit|target|tp\d?|sl|stop\s?loss|take\s?profit|close(d)?)\b",
-    re.IGNORECASE,
-)
-# A $TICKER, a slash pair (XAU/USD, EUR/USD), or a 6-letter combined pair
-# (XAUUSD, EURUSD) built from a real currency/commodity code -- not just
-# any 2-6 letter all-caps word, which matched ordinary hype-text words
-# like GET/TAP/NOW and let engagement-bait through.
 _TICKER_PATTERN = re.compile(
     r"\$[A-Z]{2,6}\b|"
     r"\b[A-Z]{3,4}/[A-Z]{3,4}\b|"
     r"\b(XAU|XAG|BTC|ETH|EUR|GBP|USD|JPY|CHF|CAD|AUD|NZD)(USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD)\b",
     re.IGNORECASE,
 )
+_DIRECTION_PATTERN = re.compile(r"\b(buy|sell|long|short)\b", re.IGNORECASE)
+_ENTRY_PATTERN = re.compile(r"\bentry\b", re.IGNORECASE)
+_TP_PATTERN = re.compile(r"\btp\s?\d?\b|\btake\s?profit\b", re.IGNORECASE)
+_SL_PATTERN = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
 # A price-looking number: a decimal (1.1487), a comma-grouped thousand
 # (2,150.50), or a bare 3+-digit integer (4392) -- not a lone 1-2 digit
 # number like the "2" in "GET READY FOR 2 SIGNALS", which used to be
@@ -61,21 +57,24 @@ _PRICE_PATTERN = re.compile(r"\b\d{1,3}(,\d{3})+(\.\d+)?\b|\b\d*\.\d+\b|\b\d{3,}
 
 def looks_like_trading_text(text: str) -> bool:
     """
-    Layer-1 filter: deliberately strict, not just cheap. An explicit
-    action word (buy/sell/entry/tp/sl/...) is enough on its own; short of
-    that, only a real currency-pair-style ticker next to a real
-    price-looking number counts -- generic words like "signal"/"call" and
-    hype text with stray digits/caps no longer pass by themselves. This
-    is the gate that decides what reaches the LLM (and costs credits) and
-    what shows up in Recent Signals at all, so precision matters more
-    than catching every edge case.
+    Layer-1 filter: by design, this rejects almost everything. Only a
+    complete structured entry -- a real currency-pair ticker, an explicit
+    direction (or the word "entry"), at least one TP, an SL, and an
+    actual price-looking number somewhere in the message -- passes.
+    Update/close-only posts (e.g. "TP3 DONE 170+ PIPS", no SL) and
+    anything less than the full structure are deliberately excluded, not
+    just engagement-bait/hype text. This is the gate that decides what
+    reaches the LLM (and costs credits) and what shows up in Recent
+    Signals at all, so precision matters far more than recall here.
     """
     if not text or len(text.strip()) < 3:
         return False
-    has_action = bool(_ACTION_KEYWORDS.search(text))
     has_ticker = bool(_TICKER_PATTERN.search(text))
+    has_direction = bool(_DIRECTION_PATTERN.search(text)) or bool(_ENTRY_PATTERN.search(text))
+    has_tp = bool(_TP_PATTERN.search(text))
+    has_sl = bool(_SL_PATTERN.search(text))
     has_price = bool(_PRICE_PATTERN.search(text))
-    return has_action or (has_ticker and has_price)
+    return has_ticker and has_direction and has_tp and has_sl and has_price
 
 
 _SCORING_INSTRUCTIONS = """You are judging whether a message forwarded from Telegram is a genuine, \
