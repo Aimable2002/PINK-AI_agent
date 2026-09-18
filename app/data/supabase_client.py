@@ -254,3 +254,42 @@ def update_signal(signal_id: str, **fields) -> None:
         return
     client = get_client()
     client.table("signals").update(fields).eq("id", signal_id).execute()
+
+
+# ------------------------------------------------------------------- trading
+
+def insert_trading_signal(
+    user_id: str,
+    agent_service_id: str | None,
+    pair: str,
+    timeframe: str,
+    forecast_model: str,
+    direction: str | None,
+    confidence: float | None,
+    raw_forecast: dict | None,
+) -> dict:
+    client = get_client()
+    resp = client.table("trading_signals").insert({
+        "user_id": user_id,
+        "agent_service_id": agent_service_id,
+        "pair": pair,
+        "timeframe": timeframe,
+        "forecast_model": forecast_model,
+        "direction": direction,
+        "confidence": confidence,
+        "raw_forecast": raw_forecast or {},
+    }).execute()
+    return (resp.data or [{}])[0]
+
+
+def list_trading_signals(user_id: str, limit: int = 50) -> list[dict]:
+    client = get_client()
+    resp = (
+        client.table("trading_signals")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(min(limit, 200))
+        .execute()
+    )
+    return resp.data or []

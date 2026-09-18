@@ -1,8 +1,10 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from app.agent_services import trading_agent
+from app.config import get_forecast_config
 from app.connectors.manager import ConnectorConfig, MCPConnectorManager
 from app.core.agent_runtime import run_agent_loop
 from app.core.llm_client import get_default_tools
@@ -142,8 +144,29 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(dev_tools[0]["type"], "function")
         self.assertEqual(dev_tools[0]["function"]["name"], "web_search")
+        self.assertIn("browser_use", {tool["function"]["name"] for tool in dev_tools})
         self.assertEqual(prod_tools[0]["type"], "function")
         self.assertEqual(prod_tools[0]["function"]["name"], "web_search")
+        self.assertIn("browser_use", {tool["function"]["name"] for tool in prod_tools})
+
+    async def test_trading_agent_requires_pair_and_timeframe(self):
+        manager = SimpleNamespace(call_tool=AsyncMock())
+        with self.assertRaisesRegex(ValueError, "pair.*timeframe"):
+            await trading_agent.generate_signal("user-123", {"config": {"pair": None, "timeframe": None}}, manager)
+
+    async def test_trading_agent_combines_forecast_responses_deterministically(self):
+        combined = trading_agent._combine_forecast_results([
+            {"model": "kronos", "direction": "long", "confidence": 0.8, "raw": {"forecast": 1.02}},
+            {"model": "chronos2", "direction": "short", "confidence": 0.7, "raw": {"forecast": 0.99}},
+        ], "kronos")
+        self.assertEqual(combined["direction"], "long")
+        self.assertEqual(combined["model"], "kronos")
+        self.assertGreaterEqual(combined["confidence"], 0.70)
+
+    def test_get_forecast_config_fails_closed(self):
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "KRONOS_PROVIDER"):
+                get_forecast_config("kronos")
 
 
 if __name__ == "__main__":

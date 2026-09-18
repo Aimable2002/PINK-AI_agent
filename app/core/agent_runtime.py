@@ -15,7 +15,7 @@ import json
 import time
 
 from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS, TOOL_CALL_CREDIT_SURCHARGE
-from app.core.llm_client import call_tier, extract_usage, get_default_tools, web_search
+from app.core.llm_client import browser_use, call_tier, extract_usage, get_default_tools, web_search
 from app.connectors.manager import MCPConnectorManager
 from app.connectors.native_tools import NATIVE_CONNECTOR_IDS, call_native_tool, get_native_tool_schemas
 from app.core.router import select_tier
@@ -203,6 +203,14 @@ async def run_agent_loop(
                     if isinstance(arguments, str):
                         arguments = json.loads(arguments)
                     tool_output = await web_search(arguments.get("query", ""))
+                except Exception as exc:
+                    tool_output = f"error: {exc}"
+            elif call_name == "browser_use":
+                try:
+                    arguments = call["arguments"]
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
+                    tool_output = await browser_use(arguments.get("task", ""))
                 except Exception as exc:
                     tool_output = f"error: {exc}"
             elif call_name in ("telegram_send_message", "telegram_list_chats", "whatsapp_send_alert"):

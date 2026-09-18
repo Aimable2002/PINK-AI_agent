@@ -131,6 +131,49 @@ FALLBACK_COST_PER_1K_TOKENS_USD = {
 # doesn't, even if token usage is identical.
 TOOL_CALL_CREDIT_SURCHARGE = float(os.environ.get("TOOL_CALL_CREDIT_SURCHARGE", "0.5"))
 
+# Forecasting connector settings.
+FORECASTING_ENABLED = MODE == "prod"
+FORECAST_MODEL_CONFIGS = {
+    "kronos": {
+        "provider_env": "KRONOS_PROVIDER",
+        "hf_endpoint_url_env": "KRONOS_HF_ENDPOINT_URL",
+        "hf_token_env": "KRONOS_HF_TOKEN",
+        "runpod_url_env": "KRONOS_RUNPOD_URL",
+        "runpod_key_env": "KRONOS_RUNPOD_KEY",
+    },
+    "chronos2": {
+        "provider_env": "CHRONOS2_PROVIDER",
+        "hf_endpoint_url_env": "CHRONOS2_HF_ENDPOINT_URL",
+        "hf_token_env": "CHRONOS2_HF_TOKEN",
+        "runpod_url_env": "CHRONOS2_RUNPOD_URL",
+        "runpod_key_env": "CHRONOS2_RUNPOD_KEY",
+    },
+}
+FORECAST_CACHE_TTL_SECONDS = int(os.environ.get("FORECAST_CACHE_TTL_SECONDS", "600"))
+FORECAST_SIGNAL_CREDIT_COST = float(os.environ.get("FORECAST_SIGNAL_CREDIT_COST", "0.75"))
+
+
+def get_forecast_config(model_name: str) -> dict:
+    if model_name not in FORECAST_MODEL_CONFIGS:
+        raise ValueError(f"Unknown forecast model: {model_name!r}")
+
+    cfg = FORECAST_MODEL_CONFIGS[model_name]
+    provider = os.environ.get(cfg["provider_env"], "").strip().lower()
+    if not provider:
+        raise RuntimeError(f"MODE=prod requires {cfg['provider_env']} to be set for model '{model_name}'.")
+
+    if provider == "huggingface":
+        envs = [cfg["hf_endpoint_url_env"], cfg["hf_token_env"]]
+    elif provider == "runpod":
+        envs = [cfg["runpod_url_env"], cfg["runpod_key_env"]]
+    else:
+        raise RuntimeError(f"Unsupported forecast provider '{provider}' for model '{model_name}'.")
+
+    missing = [name for name in envs if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"Forecast model '{model_name}' is misconfigured; missing env vars: {', '.join(missing)}")
+    return {"provider": provider, "model_name": model_name, **cfg}
+
 
 def get_tier_config(tier: str) -> dict:
     if tier not in ("classifier", "small", "medium", "best"):

@@ -29,6 +29,22 @@ def get_default_tools(mode: str | None = None) -> list[dict]:
                     "required": ["query"],
                 },
             },
+        }, {
+            "type": "function",
+            "function": {
+                "name": "browser_use",
+                "description": "Open a web page and extract information for a user task.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "The browser task to perform, such as 'get the current price of BTCUSD'.",
+                        }
+                    },
+                    "required": ["task"],
+                },
+            },
         }]
 
     if active_mode == "prod":
@@ -46,6 +62,22 @@ def get_default_tools(mode: str | None = None) -> list[dict]:
                         }
                     },
                     "required": ["query"],
+                },
+            },
+        }, {
+            "type": "function",
+            "function": {
+                "name": "browser_use",
+                "description": "Open a web page and extract information for a user task.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "The browser task to perform, such as 'get the current price of BTCUSD'.",
+                        }
+                    },
+                    "required": ["task"],
                 },
             },
         }]
@@ -80,6 +112,14 @@ async def web_search(query: str) -> str:
         for idx, result in enumerate(organic[:5])
     ]
     return "\n".join(formatted)
+
+
+async def browser_use(task: str) -> str:
+    """Browser-use shim for the assistant tool surface. The real implementation can be
+    wired to a package later; this keeps the runtime contract open without breaking tests."""
+    if not task or not str(task).strip():
+        return "error: browser_use task is empty."
+    return f"browser_use not configured for task: {task}"
 
 
 async def call_tier(tier: str, messages: list[dict], **kwargs) -> dict:

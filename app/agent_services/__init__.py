@@ -7,8 +7,9 @@ Adding a new agent service means writing its file and adding one line
 here; nothing else in the daemon or task layer needs to change.
 """
 
-from app.agent_services import telegram_signal_monitor
+from app.agent_services import telegram_signal_monitor, trading_agent
 
 REGISTRY = {
     telegram_signal_monitor.SERVICE_ID: telegram_signal_monitor,
+    trading_agent.SERVICE_ID: trading_agent,
 }

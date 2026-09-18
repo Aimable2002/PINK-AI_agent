@@ -55,6 +55,24 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
     return {"status": "scored", **{k: v for k, v in outcome.items() if k != "raw_text"}}
 
 
+@celery_app.task(name="app.queue.agent_tasks.generate_signal_job", bind=True, max_retries=2)
+def generate_signal_job(self, user_id: str, service_row: dict):
+    module = REGISTRY.get(service_row.get("service_id"))
+    if module is None:
+        return {"status": "error", "detail": f"unknown service_id '{service_row.get('service_id')}'"}
+
+    try:
+        outcome = asyncio.run(module.generate_signal(user_id, service_row, service_row.get("connector_manager") or __import__("app.connectors.manager", fromlist=["MCPConnectorManager"]).MCPConnectorManager()))
+    except AgentServicePaused as exc:
+        return {"status": "paused", "reason": exc.reason}
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            return {"status": "error", "detail": str(exc)}
+        raise self.retry(exc=exc, countdown=5)
+
+    return {"status": "generated", **outcome}
+
+
 @celery_app.task(name="app.queue.agent_tasks.send_telegram_alert_job", bind=True, max_retries=3)
 def send_telegram_alert_job(self, user_id: str, signal_id: str, chat: str, text: str):
     try:
