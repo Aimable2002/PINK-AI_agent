@@ -44,37 +44,62 @@ _TICKER_PATTERN = re.compile(
     r"\b(XAU|XAG|BTC|ETH|EUR|GBP|USD|JPY|CHF|CAD|AUD|NZD)(USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD)\b",
     re.IGNORECASE,
 )
-_DIRECTION_PATTERN = re.compile(r"\b(buy|sell|long|short)\b", re.IGNORECASE)
-_ENTRY_PATTERN = re.compile(r"\bentry\b", re.IGNORECASE)
-_TP_PATTERN = re.compile(r"\btp\s?\d?\b|\btake\s?profit\b", re.IGNORECASE)
-_SL_PATTERN = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
-# A price-looking number: a decimal (1.1487), a comma-grouped thousand
-# (2,150.50), or a bare 3+-digit integer (4392) -- not a lone 1-2 digit
-# number like the "2" in "GET READY FOR 2 SIGNALS", which used to be
-# enough on its own to count as a "price".
-_PRICE_PATTERN = re.compile(r"\b\d{1,3}(,\d{3})+(\.\d+)?\b|\b\d*\.\d+\b|\b\d{3,}\b")
+_ENTRY_LABEL = re.compile(r"\bentry\b", re.IGNORECASE)
+_AT_LABEL = re.compile(r"\b(buy|sell|long|short)\b[^.\n]{0,25}?\bat\b", re.IGNORECASE)
+_TP_LABEL = re.compile(r"\btp\s?\d{0,2}\b|\btake\s?profit\b", re.IGNORECASE)
+_SL_LABEL = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
+# Up to 12 filler characters (e.g. " Price: ", ": ", " now at ", " LIMIT
+# at ") between a label and the number that belongs to it, then the
+# number itself. Kept in its own group with the sign, if any, still
+# attached, so the caller can tell a bare price (1.1467) apart from a
+# signed pip/point delta (+20, -60).
+_NUMBER_AFTER = re.compile(r"[^\d\n]{0,12}([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[+-]?\.\d+)")
+_PIP_SUFFIX = re.compile(r"^\s*(pips?|points?|pts?)\b", re.IGNORECASE)
+
+
+def _price_right_after(text: str, pos: int) -> bool:
+    """
+    True only if a genuine price level (not a signed pips/points delta)
+    immediately follows position `pos` in `text`, within a short amount
+    of filler text.
+    """
+    m = _NUMBER_AFTER.match(text, pos)
+    if not m:
+        return False
+    number = m.group(1)
+    if number.startswith("+") or number.startswith("-"):
+        return False  # "+20", "-60" -- an outcome, not a price level
+    if _PIP_SUFFIX.match(text, m.end()):
+        return False  # "20 pips" -- an outcome stated without a sign
+    return True
+
+
+def _has_price_for(label_pattern: re.Pattern, text: str) -> bool:
+    return any(_price_right_after(text, m.end()) for m in label_pattern.finditer(text))
 
 
 def looks_like_trading_text(text: str) -> bool:
     """
-    Layer-1 filter: by design, this rejects almost everything. Only a
-    complete structured entry -- a real currency-pair ticker, an explicit
-    direction (or the word "entry"), at least one TP, an SL, and an
-    actual price-looking number somewhere in the message -- passes.
-    Update/close-only posts (e.g. "TP3 DONE 170+ PIPS", no SL) and
-    anything less than the full structure are deliberately excluded, not
-    just engagement-bait/hype text. This is the gate that decides what
-    reaches the LLM (and costs credits) and what shows up in Recent
-    Signals at all, so precision matters far more than recall here.
+    Layer-1 filter: a real currency-pair ticker, an entry price (the
+    number attached to the word "entry", or to "buy/sell/long/short ...
+    at"), a TP price, and an SL price -- each of those last three must be
+    an actual price level immediately after its label, not just the
+    label's word appearing somewhere in the text. This is what actually
+    distinguishes a genuine entry signal ("TP1 1.1467", "SL 4310") from a
+    result/recap post ("TP +20 pips", "SL -60pips") or a bare mention of
+    the word with nothing concrete attached -- not message length or how
+    many times a word repeats, both of which are incidental. This is the
+    gate that decides what reaches the LLM (and costs credits) and what
+    shows up in Recent Signals at all, so precision matters far more than
+    recall here.
     """
     if not text or len(text.strip()) < 3:
         return False
     has_ticker = bool(_TICKER_PATTERN.search(text))
-    has_direction = bool(_DIRECTION_PATTERN.search(text)) or bool(_ENTRY_PATTERN.search(text))
-    has_tp = bool(_TP_PATTERN.search(text))
-    has_sl = bool(_SL_PATTERN.search(text))
-    has_price = bool(_PRICE_PATTERN.search(text))
-    return has_ticker and has_direction and has_tp and has_sl and has_price
+    has_entry_price = _has_price_for(_ENTRY_LABEL, text) or _has_price_for(_AT_LABEL, text)
+    has_tp_price = _has_price_for(_TP_LABEL, text)
+    has_sl_price = _has_price_for(_SL_LABEL, text)
+    return has_ticker and has_entry_price and has_tp_price and has_sl_price
 
 
 _SCORING_INSTRUCTIONS = """You are judging whether a message forwarded from Telegram is a genuine, \
