@@ -13,6 +13,7 @@ consuming unbounded compute if the model never converges on its own.
 
 import json
 import time
+import asyncio
 
 from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS, TOOL_CALL_CREDIT_SURCHARGE
 from app.core.llm_client import browser_use, call_tier, extract_usage, get_default_tools, web_search
@@ -109,24 +110,38 @@ async def run_agent_loop(
     result = AgentRunResult()
     connector_manager = connector_manager or MCPConnectorManager()
 
-    conversation = list(messages) +  [{"role": "user", "content": prompt}]
+    conversation = list(messages)
     tools = get_default_tools(mode)
     tools.extend(get_native_tool_schemas(connectors))
+    unavailable_connectors: set[str] = set()
+    unavailable_details: dict[str, str] = {}
     for connector_name in connectors:
         if connector_name in connector_manager._connectors:
             try:
                 # Tool discovery is required to give the model valid schemas,
                 # but a connector being temporarily unavailable must not abort
                 # the whole run or prevent other tools from being used.
-                tools.extend(await connector_manager.list_tool_schemas(connector_name))
+                tools.extend(await asyncio.wait_for(
+                    connector_manager.list_tool_schemas(connector_name),
+                    timeout=20,
+                ))
             except Exception as exc:
-                conversation.append({
-                    "role": "system",
-                    "content": (
-                        f"Connector '{connector_name}' is currently unavailable and has no tools "
-                        f"in this run. If relevant, explain the failure to the user: {exc}"
-                    ),
-                })
+                unavailable_connectors.add(connector_name)
+                unavailable_details[connector_name] = str(exc)
+
+    if unavailable_connectors:
+        conversation.append({
+            "role": "system",
+            "content": (
+                "The following selected connectors are unavailable and must not be called: "
+                + ", ".join(
+                    f"{name} ({unavailable_details.get(name, 'unknown error')})"
+                    for name in sorted(unavailable_connectors)
+                )
+                + ". Explain that limitation if the user's request requires one of them."
+            ),
+        })
+    conversation.append({"role": "user", "content": prompt})
 
     start_time = time.monotonic()
 
@@ -236,6 +251,13 @@ async def run_agent_loop(
                         tool_output = await call_native_tool(user_id, call_name, arguments)
                     except Exception as exc:
                         tool_output = f"error: {exc}"
+            elif connector_name is not None and connector_name in unavailable_connectors:
+                tool_output = (
+                    f"error: connector '{connector_name}' is unavailable. "
+                    f"{unavailable_details.get(connector_name, 'unknown error')} "
+                    "Do not retry this connector in this run."
+                )
+                result.stopped_reason = "connector_unavailable"
             elif connector_name is not None and connector_name in connectors and connector_name not in NATIVE_CONNECTOR_IDS:
                 allowed, denied_scope = connector_manager.tool_scope_allowed(connector_name, tool_name)
                 if not allowed:
@@ -247,12 +269,23 @@ async def run_agent_loop(
                         arguments = call["arguments"]
                         if isinstance(arguments, str):
                             arguments = json.loads(arguments)
-                        tool_result = await connector_manager.call_tool(
-                            connector_name, tool_name, arguments
+                        tool_result = await asyncio.wait_for(
+                            connector_manager.call_tool(
+                                connector_name, tool_name, arguments
+                            ),
+                            timeout=30,
                         )
                         tool_output = str(tool_result)
                     except Exception as exc:
                         tool_output = f"error: {exc}"
+                        unavailable_connectors.add(connector_name)
+                        unavailable_details[connector_name] = str(exc)
+                        tools = [
+                            tool for tool in tools
+                            if not tool.get("function", {}).get("name", "").startswith(
+                                f"{connector_name}__"
+                            )
+                        ]
             elif connector_name is not None:
                 tool_output = f"error: connector '{connector_name}' not connected for this user"
             else:
@@ -271,6 +304,13 @@ async def run_agent_loop(
                 "tool_call_id": call["id"],
                 "content": tool_output,
             })
+
+        if result.stopped_reason == "connector_unavailable":
+            result.final_message = (
+                "I could not complete this request because the requested connector "
+                "is unavailable."
+            )
+            break
     else:
         result.stopped_reason = "max_iterations_reached"
 
