@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from collections import Counter
 from typing import Any
 
@@ -19,14 +20,21 @@ from app.data.supabase_client import insert_trading_signal, touch_service_last_r
 from app.queue.tasks import charge_usage, get_remaining_credits
 
 SERVICE_ID = "trading-agent"
-DEFAULT_CONFIG = {"pair": None, "timeframe": None, "forecast_model": "kronos"}
+DEFAULT_CONFIG = {
+    "pair": None,
+    "timeframe": None,
+    "connector": "mt5",
+    "candle_tool": "get_candles",
+    "forecast_models": ["chronos2", "timesfm2_5", "moirai_moe"],
+}
 
 
-def _cache_key(pair: str, timeframe: str, forecast_model: str) -> str:
+def _cache_key(pair: str, timeframe: str, connector: str, forecast_models: list[str]) -> str:
     sanitized_pair = (pair or "").strip().upper().replace(" ", "")
     sanitized_timeframe = (timeframe or "").strip().lower().replace(" ", "")
-    sanitized_model = (forecast_model or "kronos").strip().lower().replace(" ", "")
-    return f"forecast:{sanitized_pair}:{sanitized_timeframe}:{sanitized_model}"
+    sanitized_connector = (connector or "mt5").strip().lower().replace(" ", "")
+    sanitized_models = ",".join(sorted(str(model).strip().lower() for model in forecast_models))
+    return f"forecast:{sanitized_pair}:{sanitized_timeframe}:{sanitized_connector}:{sanitized_models}"
 
 
 def _get_cache_ttl_seconds(timeframe: str) -> int:
@@ -79,6 +87,36 @@ def _combine_forecast_results(results: list[dict], preferred_model: str) -> dict
     }
 
 
+def _model_signal(item: dict, model: str) -> dict:
+    direction = _normalize_direction(item.get("direction") or item.get("signal") or item.get("action"))
+    return {
+        "model": model,
+        "direction": direction,
+        "confidence": float(item.get("confidence", item.get("score", 0.0)) or 0.0),
+        "entry": item.get("entry"),
+        "take_profits": item.get("take_profits") or item.get("targets") or [],
+        "stop_loss": item.get("stop_loss") or item.get("sl"),
+        "raw": item,
+    }
+
+
+def _build_actionable_signal(pair: str, timeframe: str, model_forecasts: list[dict]) -> dict:
+    combined = _combine_forecast_results(model_forecasts, "")
+    directional = [item for item in model_forecasts if item.get("direction") == combined["direction"]]
+    source = max(directional or model_forecasts, key=lambda item: item.get("confidence", 0.0))
+    return {
+        "symbol": pair.upper(),
+        "signal_type": "forex",
+        "direction": combined["direction"],
+        "entry": source.get("entry"),
+        "take_profits": source.get("take_profits") or [],
+        "stop_loss": source.get("stop_loss"),
+        "timeframe": timeframe,
+        "confidence": combined["confidence"],
+        "consensus": sum(item.get("direction") == combined["direction"] for item in model_forecasts),
+    }
+
+
 async def generate_signal(user_id: str, service_row: dict, connector_manager: MCPConnectorManager) -> dict:
     """
     Direct connector-to-connector pipeline for the trading agent. This path intentionally
@@ -88,18 +126,21 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
     config = (service_row or {}).get("config") or {}
     pair = str(config.get("pair") or "").strip()
     timeframe = str(config.get("timeframe") or "").strip()
-    forecast_model = str(config.get("forecast_model") or DEFAULT_CONFIG["forecast_model"]).strip() or DEFAULT_CONFIG["forecast_model"]
+    connector = str(config.get("connector") or DEFAULT_CONFIG["connector"]).strip().lower()
+    candle_tool = str(config.get("candle_tool") or DEFAULT_CONFIG["candle_tool"]).strip()
+    forecast_models = [str(model).strip() for model in (config.get("forecast_models") or DEFAULT_CONFIG["forecast_models"]) if str(model).strip()]
+    forecast_model = ",".join(forecast_models)
 
     if not pair or not timeframe:
         raise ValueError("Trading agent is not configured: both pair and timeframe are required.")
 
     if not FORECASTING_ENABLED:
         raise AgentServicePaused("forecasting is not available in dev")
-    if not connector_manager.is_registered("mt5"):
-        raise AgentServicePaused("MT5 connector not registered")
+    if not connector_manager.is_registered(connector):
+        raise AgentServicePaused(f"{connector} connector not registered")
 
     cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    key = _cache_key(pair, timeframe, forecast_model)
+    key = _cache_key(pair, timeframe, connector, forecast_models)
     cached_raw = cache.get(key)
     if cached_raw:
         cached = json.loads(cached_raw)
@@ -108,16 +149,18 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
             agent_service_id=service_row.get("id"),
             pair=pair,
             timeframe=timeframe,
-            forecast_model=forecast_model,
+            forecast_model=",".join(forecast_models),
             direction=cached.get("direction"),
             confidence=float(cached.get("confidence", 0.0) or 0.0),
             raw_forecast=cached.get("raw_forecast") or {},
+            signal=cached.get("signal") or {},
+            model_forecasts=cached.get("model_forecasts") or [],
         )
         return {
             "signal_id": signal_row["id"],
             "pair": pair,
             "timeframe": timeframe,
-            "forecast_model": forecast_model,
+            "forecast_models": forecast_models,
             "direction": cached.get("direction", "neutral"),
             "confidence": float(cached.get("confidence", 0.0) or 0.0),
             "raw_forecast": cached.get("raw_forecast") or {},
@@ -128,41 +171,37 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
     lock_acquired = cache.set(lock_key, "1", nx=True, ex=30)
     if lock_acquired:
         try:
-            mt5_response = await connector_manager.call_tool(
-                "mt5", "get_candles", {"pair": pair, "timeframe": timeframe}
+            market_response = await connector_manager.call_tool(
+                connector, candle_tool, {"pair": pair, "timeframe": timeframe}
             )
-            forecast_response = await forecast_price(
-                forecast_model,
-                symbol=pair,
-                timeframe=timeframe,
-                candles=_extract_candles(mt5_response),
-            )
+            responses = await asyncio.gather(*[
+                forecast_price(model, symbol=pair, timeframe=timeframe, candles=_extract_candles(market_response))
+                for model in forecast_models
+            ])
             forecast_results = []
-            payload = forecast_response if isinstance(forecast_response, list) else [forecast_response]
-            for item in payload:
-                if isinstance(item, dict):
-                    forecast_results.append({
-                        "model": item.get("model") or forecast_model,
-                        "direction": _normalize_direction(item.get("direction") or item.get("signal") or item.get("action")),
-                        "confidence": float(item.get("confidence", item.get("score", 0.0)) or 0.0),
-                        "raw": item,
-                    })
+            for model, forecast_response in zip(forecast_models, responses):
+                payload = forecast_response if isinstance(forecast_response, list) else [forecast_response]
+                item = next((value for value in payload if isinstance(value, dict)), {})
+                forecast_results.append(_model_signal(item, model))
             if not forecast_results:
                 forecast_results.append({
-                    "model": forecast_model,
+                    "model": "ensemble",
                     "direction": "neutral",
                     "confidence": 0.0,
                     "raw": forecast_response,
                 })
 
-            combined = _combine_forecast_results(forecast_results, forecast_model)
+            combined = _combine_forecast_results(forecast_results, "")
+            signal = _build_actionable_signal(pair, timeframe, forecast_results)
             signal = {
                 "pair": pair,
                 "timeframe": timeframe,
-                "forecast_model": forecast_model,
+                "forecast_models": forecast_models,
                 "direction": combined["direction"],
                 "confidence": float(combined["confidence"] or 0.0),
                 "raw_forecast": combined["raw_forecast"],
+                "signal": signal,
+                "model_forecasts": forecast_results,
             }
             cache.setex(key, _get_cache_ttl_seconds(timeframe), json.dumps(signal, default=str))
             signal_row = insert_trading_signal(
@@ -170,10 +209,12 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
                 agent_service_id=service_row.get("id"),
                 pair=pair,
                 timeframe=timeframe,
-                forecast_model=forecast_model,
+                forecast_model=",".join(forecast_models),
                 direction=signal["direction"],
                 confidence=signal["confidence"],
                 raw_forecast=signal["raw_forecast"],
+                signal=signal["signal"],
+                model_forecasts=forecast_results,
             )
             from app.queue.tasks import charge_usage
             charge_usage(user_id, {"credits_used": FORECAST_SIGNAL_CREDIT_COST, "cost_usd": 0.0, "steps": [], "tiers_used": [forecast_model]})

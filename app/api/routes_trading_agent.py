@@ -13,7 +13,9 @@ router = APIRouter(prefix="/v1/agent-services", tags=["agent-services"])
 class TradingAgentConfig(BaseModel):
     pair: str | None = None
     timeframe: str | None = None
-    forecast_model: str = DEFAULT_CONFIG["forecast_model"]
+    connector: str = DEFAULT_CONFIG["connector"]
+    candle_tool: str = DEFAULT_CONFIG["candle_tool"]
+    forecast_models: list[str] = DEFAULT_CONFIG["forecast_models"]
 
 
 @router.get("/trading-agent")
@@ -57,10 +59,12 @@ async def generate(payload: TradingAgentConfig | None = None, user: UserContext 
     config = (row.get("config") or {})
     pair = (payload.pair if payload else config.get("pair")) or config.get("pair")
     timeframe = (payload.timeframe if payload else config.get("timeframe")) or config.get("timeframe")
-    forecast_model = (payload.forecast_model if payload else config.get("forecast_model")) or config.get("forecast_model") or DEFAULT_CONFIG["forecast_model"]
+    connector = (payload.connector if payload else config.get("connector")) or config.get("connector") or DEFAULT_CONFIG["connector"]
+    candle_tool = (payload.candle_tool if payload else config.get("candle_tool")) or config.get("candle_tool") or DEFAULT_CONFIG["candle_tool"]
+    forecast_models = (payload.forecast_models if payload else config.get("forecast_models")) or config.get("forecast_models") or DEFAULT_CONFIG["forecast_models"]
     if not pair or not timeframe:
         raise HTTPException(status_code=400, detail="Set both pair and timeframe before generating a signal.")
-    service_row = {**row, "config": {**config, "pair": pair, "timeframe": timeframe, "forecast_model": forecast_model}}
+    service_row = {**row, "config": {**config, "pair": pair, "timeframe": timeframe, "connector": connector, "candle_tool": candle_tool, "forecast_models": forecast_models}}
     job = generate_signal_job.apply_async(args=[user.user_id, service_row], queue="free_standard")
     return {"job_id": job.id, "status": "queued"}
 

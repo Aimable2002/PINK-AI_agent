@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.agent_services import trading_agent
+from app.agent_services import telegram_signal_monitor
 from app.config import get_forecast_config
 from app.connectors.manager import ConnectorConfig, MCPConnectorManager
 from app.core.agent_runtime import run_agent_loop
@@ -203,6 +204,31 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "KRONOS_PROVIDER"):
                 get_forecast_config("kronos")
+
+    def test_telegram_signal_parser_normalizes_multiple_targets(self):
+        signal = telegram_signal_monitor._parse_signal_response(
+            '{"is_signal":true,"signal_type":"forex","symbol":"eurusd",'
+            '"direction":"buy","entry":1.08,"take_profits":[1.09,1.10],'
+            '"stop_loss":1.07,"expiry_minutes":null,"reasoning":"clear"}'
+        )
+        self.assertEqual(signal["symbol"], "EURUSD")
+        self.assertEqual(signal["take_profits"], [1.09, 1.10])
+        self.assertEqual(signal["parse_status"], "parsed")
+
+    def test_telegram_signal_parser_rejects_invalid_json(self):
+        signal = telegram_signal_monitor._parse_signal_response("not json")
+        self.assertFalse(signal["is_signal"])
+        self.assertEqual(signal["parse_status"], "rejected")
+
+    def test_trading_ensemble_builds_actionable_signal(self):
+        signal = trading_agent._build_actionable_signal("EURUSD", "15m", [
+            {"model": "chronos2", "direction": "long", "confidence": 0.8, "entry": 1.08, "take_profits": [1.09], "stop_loss": 1.07},
+            {"model": "timesfm2_5", "direction": "long", "confidence": 0.7, "entry": 1.08, "take_profits": [1.10], "stop_loss": 1.07},
+            {"model": "moirai_moe", "direction": "short", "confidence": 0.6, "entry": 1.08, "take_profits": [1.06], "stop_loss": 1.09},
+        ])
+        self.assertEqual(signal["symbol"], "EURUSD")
+        self.assertEqual(signal["direction"], "long")
+        self.assertEqual(signal["consensus"], 2)
 
 
 if __name__ == "__main__":

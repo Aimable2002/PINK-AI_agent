@@ -11,7 +11,6 @@ router = APIRouter(prefix="/v1/agent-services", tags=["agent-services"])
 
 class TelegramSignalMonitorConfig(BaseModel):
     monitored_chats: list[str] = []
-    min_confidence: int = DEFAULT_CONFIG["min_confidence"]
     alert_chat: str = DEFAULT_CONFIG["alert_chat"]
 
 

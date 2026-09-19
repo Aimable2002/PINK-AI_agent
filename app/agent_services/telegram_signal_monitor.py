@@ -10,13 +10,9 @@ and enqueues a Celery task for everything past it):
       before anything reaches a queue. Deliberately dumb and fast.
 
   async def score_signal(user_id, service_row, channel, raw_text) -> dict
-      The real (LLM) step. Per product decision: this does NOT rewrite,
-      summarise, or re-analyse the message, and does NOT pull separate
-      market/chart data. Its only job is judging whether the raw text,
-      as given, is a genuine trading signal, using the web_search tool
-      only if it needs outside context to judge plausibility -- and
-      returning a confidence score. The alert that goes out to the user
-      is the ORIGINAL text plus that score, never a rewritten version.
+      The real (LLM) step normalizes the original message into a stable
+      Forex or binary-option JSON signal. The raw message is retained for
+      audit, but downstream code uses the normalized object.
 """
 
 from __future__ import annotations
@@ -33,7 +29,6 @@ SERVICE_ID = "telegram-signal-monitor"
 
 DEFAULT_CONFIG = {
     "monitored_chats": [],   # list of Telegram chat ids/usernames to watch
-    "min_confidence": 6,      # 0-10; below this, scored but not alerted
     "alert_chat": "me",       # where the alert is sent -- 'me' = Saved Messages
 }
 
@@ -99,17 +94,22 @@ def looks_like_trading_text(text: str) -> bool:
     has_entry_price = _has_price_for(_ENTRY_LABEL, text) or _has_price_for(_AT_LABEL, text)
     has_tp_price = _has_price_for(_TP_LABEL, text)
     has_sl_price = _has_price_for(_SL_LABEL, text)
-    return has_ticker and has_entry_price and has_tp_price and has_sl_price
+    # This is only a cheap candidate gate. The model extracts levels when
+    # the message format is unusual.
+    return has_ticker and bool(_ENTRY_LABEL.search(text) or _AT_LABEL.search(text)) and bool(
+        _TP_LABEL.search(text) or _SL_LABEL.search(text)
+    )
 
 
-_SCORING_INSTRUCTIONS = """You are judging whether a message forwarded from Telegram is a genuine, \
-actionable trading signal -- not analysing the trade, not restating or rewriting the message, \
-just judging how credible/genuine it looks as a signal. You may use the web_search tool if you \
-need outside context to judge plausibility (e.g. checking whether an asset name is real, whether \
-a claimed event actually happened), but you are expected to fetch live price/chart data.
+_SCORING_INSTRUCTIONS = """Extract a trading signal from this Telegram message. Do not score confidence \
+and do not invent missing values. Return ONLY one JSON object with this exact shape:
+{{"is_signal": true|false, "signal_type": "forex"|"binary_option", "symbol": "...", \
+"direction": "buy"|"sell"|"call"|"put", "entry": number|null, \
+"take_profits": [number], "stop_loss": number|null, "expiry_minutes": integer|null, \
+"reasoning": "short explanation", "parse_status": "parsed"|"rejected"}}
 
-Respond with ONLY a single JSON object, no other text, no markdown fences:
-{{"is_signal": true|false, "confidence": <integer 0-10>, "reasoning": "<one short sentence>"}}
+Use an empty take_profits array when none are present. For binary options, expiry_minutes may be null \
+only when absent. Never fabricate levels.
 
 Message:
 ---
@@ -118,19 +118,36 @@ Message:
 """
 
 
-def _parse_scoring_response(text: str, fell_back: bool) -> tuple[bool, int, str]:
+def _parse_signal_response(text: str) -> dict:
     cleaned = (text or "").strip()
     cleaned = re.sub(r"^```(json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
     try:
         data = json.loads(cleaned)
-        is_signal = bool(data.get("is_signal", True))
-        confidence = int(max(0, min(10, round(float(data.get("confidence", 5))))))
-        reasoning = str(data.get("reasoning", ""))[:500]
-        return is_signal, confidence, reasoning
+        signal_type = str(data.get("signal_type", "forex")).lower()
+        direction = str(data.get("direction", "")).lower()
+        take_profits = [float(value) for value in (data.get("take_profits") or [])]
+        valid = (
+            bool(data.get("is_signal"))
+            and signal_type in {"forex", "binary_option"}
+            and direction in {"buy", "sell", "call", "put"}
+            and bool(data.get("symbol"))
+            and data.get("entry") is not None
+            and (signal_type == "binary_option" or bool(take_profits) or data.get("stop_loss") is not None)
+        )
+        return {
+            "is_signal": valid,
+            "signal_type": signal_type,
+            "symbol": str(data.get("symbol") or "").upper(),
+            "direction": direction,
+            "entry": float(data["entry"]) if data.get("entry") is not None else None,
+            "take_profits": take_profits,
+            "stop_loss": float(data["stop_loss"]) if data.get("stop_loss") is not None else None,
+            "expiry_minutes": int(data["expiry_minutes"]) if data.get("expiry_minutes") is not None else None,
+            "reasoning": str(data.get("reasoning", ""))[:500],
+            "parse_status": "parsed" if valid else "rejected",
+        }
     except Exception:
-        match = re.search(r"\b([0-9]|10)\b", cleaned)
-        confidence = int(match.group(1)) if match else 5
-        return True, confidence, f"(unparsed model response, fell back to confidence={confidence})"
+        return {"is_signal": False, "parse_status": "rejected", "reasoning": "Model response was not valid signal JSON."}
 
 
 async def score_signal(user_id: str, service_row: dict, channel: str | None, raw_text: str, signal_row: dict) -> dict:
@@ -164,32 +181,31 @@ async def score_signal(user_id: str, service_row: dict, channel: str | None, raw
     )
     charge_usage(user_id, result)
 
-    fell_back = result.get("stopped_reason") not in (None, "final_answer")
-    is_signal, confidence, reasoning = _parse_scoring_response(result.get("final_message", ""), fell_back)
-
-    update_signal(signal_row["id"], confidence_score=confidence, model_reasoning=reasoning)
+    signal = _parse_signal_response(result.get("final_message", ""))
+    update_signal(signal_row["id"], **{
+        "signal_type": signal.get("signal_type"),
+        "symbol": signal.get("symbol"),
+        "direction": signal.get("direction"),
+        "entry": signal.get("entry"),
+        "take_profits": signal.get("take_profits", []),
+        "stop_loss": signal.get("stop_loss"),
+        "expiry_minutes": signal.get("expiry_minutes"),
+        "normalized_signal": signal,
+        "model_reasoning": signal.get("reasoning", ""),
+        "parse_status": signal.get("parse_status", "rejected"),
+    })
     touch_service_last_run(service_row["id"])
-
-    min_confidence = int(service_row.get("config", {}).get("min_confidence", DEFAULT_CONFIG["min_confidence"]))
-    should_alert = is_signal and confidence >= min_confidence
 
     return {
         "signal_id": signal_row["id"],
-        "is_signal": is_signal,
-        "confidence": confidence,
-        "reasoning": reasoning,
-        "should_alert": should_alert,
+        **signal,
+        "should_alert": signal.get("is_signal", False),
         "raw_text": raw_text,
         "channel": channel,
         "alert_chat": service_row.get("config", {}).get("alert_chat", DEFAULT_CONFIG["alert_chat"]),
     }
 
 
-def format_alert(channel: str | None, raw_text: str, confidence: int) -> str:
-    """
-    Per product decision: don't reformat or summarise the original
-    message -- pass it through as-is, add only the confidence score and
-    enough context (source channel) to know what's being looked at.
-    """
-    header = f"\U0001F4CA Signal from {channel}" if channel else "\U0001F4CA Signal"
-    return f"{header}\n\n{raw_text}\n\nConfidence: {confidence}/10"
+def format_alert(channel: str | None, signal: dict) -> str:
+    header = f"Signal from {channel}" if channel else "Signal"
+    return f"{header}\n\n{json.dumps(signal, ensure_ascii=True, indent=2)}"

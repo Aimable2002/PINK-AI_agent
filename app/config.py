@@ -149,6 +149,20 @@ FORECAST_MODEL_CONFIGS = {
         "runpod_url_env": "CHRONOS2_RUNPOD_URL",
         "runpod_key_env": "CHRONOS2_RUNPOD_KEY",
     },
+    "timesfm2_5": {
+        "provider_env": "TIMESFM2_5_PROVIDER",
+        "hf_endpoint_url_env": "TIMESFM2_5_HF_ENDPOINT_URL",
+        "hf_token_env": "TIMESFM2_5_HF_TOKEN",
+        "runpod_url_env": "TIMESFM2_5_RUNPOD_URL",
+        "runpod_key_env": "TIMESFM2_5_RUNPOD_KEY",
+    },
+    "moirai_moe": {
+        "provider_env": "MOIRAI_MOE_PROVIDER",
+        "hf_endpoint_url_env": "MOIRAI_MOE_HF_ENDPOINT_URL",
+        "hf_token_env": "MOIRAI_MOE_HF_TOKEN",
+        "runpod_url_env": "MOIRAI_MOE_RUNPOD_URL",
+        "runpod_key_env": "MOIRAI_MOE_RUNPOD_KEY",
+    },
 }
 FORECAST_CACHE_TTL_SECONDS = int(os.environ.get("FORECAST_CACHE_TTL_SECONDS", "600"))
 FORECAST_SIGNAL_CREDIT_COST = float(os.environ.get("FORECAST_SIGNAL_CREDIT_COST", "0.75"))

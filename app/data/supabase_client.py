@@ -267,6 +267,8 @@ def insert_trading_signal(
     direction: str | None,
     confidence: float | None,
     raw_forecast: dict | None,
+    signal: dict | None = None,
+    model_forecasts: list[dict] | None = None,
 ) -> dict:
     client = get_client()
     resp = client.table("trading_signals").insert({
@@ -278,6 +280,8 @@ def insert_trading_signal(
         "direction": direction,
         "confidence": confidence,
         "raw_forecast": raw_forecast or {},
+        "signal": signal or {},
+        "model_forecasts": model_forecasts or [],
     }).execute()
     return (resp.data or [{}])[0]
 
