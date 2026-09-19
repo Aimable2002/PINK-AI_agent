@@ -114,7 +114,19 @@ async def run_agent_loop(
     tools.extend(get_native_tool_schemas(connectors))
     for connector_name in connectors:
         if connector_name in connector_manager._connectors:
-            tools.extend(await connector_manager.list_tool_schemas(connector_name))
+            try:
+                # Tool discovery is required to give the model valid schemas,
+                # but a connector being temporarily unavailable must not abort
+                # the whole run or prevent other tools from being used.
+                tools.extend(await connector_manager.list_tool_schemas(connector_name))
+            except Exception as exc:
+                conversation.append({
+                    "role": "system",
+                    "content": (
+                        f"Connector '{connector_name}' is currently unavailable and has no tools "
+                        f"in this run. If relevant, explain the failure to the user: {exc}"
+                    ),
+                })
 
     start_time = time.monotonic()
 

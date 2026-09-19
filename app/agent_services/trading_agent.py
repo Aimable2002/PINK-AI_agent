@@ -14,6 +14,7 @@ from app.config import (
     REDIS_URL,
 )
 from app.connectors.manager import MCPConnectorManager
+from app.core.forecast_client import forecast_price
 from app.data.supabase_client import insert_trading_signal, touch_service_last_run
 from app.queue.tasks import charge_usage, get_remaining_credits
 
@@ -94,8 +95,8 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
 
     if not FORECASTING_ENABLED:
         raise AgentServicePaused("forecasting is not available in dev")
-    if not connector_manager.is_registered("forecasting"):
-        raise AgentServicePaused("forecasting connector not registered")
+    if not connector_manager.is_registered("mt5"):
+        raise AgentServicePaused("MT5 connector not registered")
 
     cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     key = _cache_key(pair, timeframe, forecast_model)
@@ -127,11 +128,14 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
     lock_acquired = cache.set(lock_key, "1", nx=True, ex=30)
     if lock_acquired:
         try:
-            mt5_response = await connector_manager.call_tool("mt5", "get_candles", {"pair": pair, "timeframe": timeframe})
-            forecast_response = await connector_manager.call_tool(
-                "forecasting",
-                "forecast_price",
-                {"symbol": pair, "timeframe": timeframe, "horizon": 1, "model": forecast_model},
+            mt5_response = await connector_manager.call_tool(
+                "mt5", "get_candles", {"pair": pair, "timeframe": timeframe}
+            )
+            forecast_response = await forecast_price(
+                forecast_model,
+                symbol=pair,
+                timeframe=timeframe,
+                candles=_extract_candles(mt5_response),
             )
             forecast_results = []
             payload = forecast_response if isinstance(forecast_response, list) else [forecast_response]
@@ -227,3 +231,22 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
             "raw_forecast": {"note": "cache miss after lock timeout"},
             "cache_hit": False,
         }
+
+
+def _extract_candles(tool_result: Any) -> Any:
+    """Convert an MCP result into JSON-shaped candle data for the model API."""
+    if isinstance(tool_result, (dict, list)):
+        return tool_result
+    structured = getattr(tool_result, "structuredContent", None)
+    if structured is not None:
+        return structured
+    content = getattr(tool_result, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            text = getattr(item, "text", None)
+            if text:
+                try:
+                    return json.loads(text)
+                except (TypeError, json.JSONDecodeError):
+                    return text
+    return str(tool_result)

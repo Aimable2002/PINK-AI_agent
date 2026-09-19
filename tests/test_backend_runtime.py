@@ -138,6 +138,42 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
             result["steps"],
         )
 
+    async def test_unavailable_connector_error_is_given_to_model(self):
+        manager = MCPConnectorManager()
+        manager.register(
+            ConnectorConfig(
+                name="mt5",
+                transport="http",
+                url="https://example.test/mcp",
+            )
+        )
+
+        async def unavailable(_connector_name):
+            raise RuntimeError("MT5 tunnel is offline")
+
+        seen_messages = []
+
+        async def fake_call_tier(_tier, messages, **_kwargs):
+            seen_messages.extend(messages)
+            return FakeResponse(content="MT5 is unavailable right now.")
+
+        async def fake_select_tier(_prompt):
+            return "small"
+
+        with patch.object(manager, "list_tool_schemas", side_effect=unavailable):
+            result = await run_agent_loop(
+                "Get the latest candles",
+                [],
+                ["mt5"],
+                connector_manager=manager,
+                call_tier_fn=fake_call_tier,
+                select_tier_fn=fake_select_tier,
+                mode="agent",
+            )
+
+        self.assertEqual(result["stopped_reason"], "model_completed")
+        self.assertTrue(any("MT5 tunnel is offline" in str(message) for message in seen_messages))
+
     def test_default_tools_switch_by_mode(self):
         dev_tools = get_default_tools("dev")
         prod_tools = get_default_tools("prod")

@@ -26,6 +26,7 @@ import asyncio
 
 from app.agent_services import REGISTRY
 from app.agent_services.base import AgentServicePaused
+from app.connectors.manager import MCPConnectorManager
 from app.connectors import telegram_service
 from app.data.supabase_client import insert_signal, update_signal
 from app.queue.celery_app import celery_app
@@ -69,7 +70,9 @@ def generate_signal_job(self, user_id: str, service_row: dict):
         return {"status": "error", "detail": f"unknown service_id '{service_row.get('service_id')}'"}
 
     try:
-        outcome = asyncio.run(module.generate_signal(user_id, service_row, service_row.get("connector_manager") or __import__("app.connectors.manager", fromlist=["MCPConnectorManager"]).MCPConnectorManager()))
+        manager = MCPConnectorManager()
+        asyncio.run(manager.load_user_connectors(user_id))
+        outcome = asyncio.run(module.generate_signal(user_id, service_row, manager))
     except AgentServicePaused as exc:
         return {"status": "paused", "reason": exc.reason}
     except Exception as exc:
