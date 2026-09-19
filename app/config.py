@@ -38,7 +38,8 @@ TIER_CONFIGS = {
             "api_key_env": "OPENROUTER_API_KEY",
         },
         "best": {
-            "model": "openrouter/poolside/laguna-s-2.1:free",
+            # "model": "openrouter/poolside/laguna-s-2.1:free",
+            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
