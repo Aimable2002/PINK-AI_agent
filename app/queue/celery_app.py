@@ -2,6 +2,7 @@ from celery import Celery
 
 from app.config import REDIS_URL
 
+
 celery_app = Celery(
     "agent_backend",
     broker=REDIS_URL,
@@ -23,8 +24,6 @@ celery_app.conf.update(
     },
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    task_time_limit=120,
-    task_soft_time_limit=100,
     result_expires=3600,
 )
 

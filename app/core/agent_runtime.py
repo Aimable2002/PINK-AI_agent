@@ -12,10 +12,9 @@ consuming unbounded compute if the model never converges on its own.
 """
 
 import json
-import time
 import asyncio
 
-from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, MAX_AGENT_RUNTIME_SECONDS, TOOL_CALL_CREDIT_SURCHARGE
+from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, TOOL_CALL_CREDIT_SURCHARGE
 from app.core.llm_client import browser_use, call_tier, extract_usage, get_default_tools, web_search
 from app.connectors.manager import MCPConnectorManager
 from app.connectors.native_tools import NATIVE_CONNECTOR_IDS, call_native_tool, get_native_tool_schemas
@@ -143,13 +142,7 @@ async def run_agent_loop(
         })
     conversation.append({"role": "user", "content": prompt})
 
-    start_time = time.monotonic()
-
     for iteration in range(MAX_AGENT_ITERATIONS):
-        if time.monotonic() - start_time > MAX_AGENT_RUNTIME_SECONDS:
-            result.stopped_reason = "max_runtime_exceeded"
-            break
-
         # Checked before every iteration, not just once before the job
         # started -- a run that had enough credits at iteration 0 can
         # burn through its whole balance by iteration 4 of a long tool

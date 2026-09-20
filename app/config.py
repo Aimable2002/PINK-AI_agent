@@ -101,8 +101,7 @@ REDIS_URL = _normalize_redis_url(
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-MAX_AGENT_ITERATIONS = int(os.environ.get("MAX_AGENT_ITERATIONS", "10"))
-MAX_AGENT_RUNTIME_SECONDS = int(os.environ.get("MAX_AGENT_RUNTIME_SECONDS", "600"))
+MAX_AGENT_ITERATIONS = int(os.environ.get("MAX_AGENT_ITERATIONS", "20"))
 FREE_QUEUE_MAX_DEPTH = int(os.environ.get("FREE_QUEUE_MAX_DEPTH", "50"))
 
 TELEGRAM_API_ID = int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
