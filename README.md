@@ -109,3 +109,7 @@ Set `MODE=prod` plus `RUNPOD_*_URL`/`RUNPOD_*_KEY` env vars (including
 `RUNPOD_CLASSIFIER_URL`/`RUNPOD_CLASSIFIER_KEY`) to flip to production
 inference. `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` required for real auth.
 `OPENROUTER_API_KEY` required for dev-mode model calls.
+
+LiteLLM debug logging is enabled by default so provider errors include the
+full diagnostic path. Set `LITELLM_DEBUG=false` to disable it when logs may
+contain sensitive request details.

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.agent_services import trading_agent
 from app.agent_services import telegram_signal_monitor
-from app.config import get_forecast_config
+from app.config import LITELLM_DEBUG, get_forecast_config
 from app.connectors.manager import ConnectorConfig, MCPConnectorManager
 from app.core.agent_runtime import run_agent_loop
 from app.core.llm_client import get_default_tools
@@ -185,6 +185,9 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prod_tools[0]["type"], "function")
         self.assertEqual(prod_tools[0]["function"]["name"], "web_search")
         self.assertIn("browser_use", {tool["function"]["name"] for tool in prod_tools})
+
+    def test_litellm_debug_is_enabled_by_default(self):
+        self.assertTrue(LITELLM_DEBUG)
 
     async def test_trading_agent_requires_pair_and_timeframe(self):
         manager = SimpleNamespace(call_tool=AsyncMock())

@@ -4,7 +4,11 @@ import os
 import httpx
 import litellm
 
-from app.config import FALLBACK_COST_PER_1K_TOKENS_USD, MODE, get_tier_config
+from app.config import FALLBACK_COST_PER_1K_TOKENS_USD, LITELLM_DEBUG, MODE, get_tier_config
+
+
+if LITELLM_DEBUG:
+    litellm._turn_on_debug()
 
 
 def get_default_tools(mode: str | None = None) -> list[dict]:

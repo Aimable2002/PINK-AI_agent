@@ -9,6 +9,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).with_name(".env"))
 
 
+def _get_bool_env(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _get_mode() -> str:
     mode = os.environ.get("MODE", "dev").lower()
     if mode not in ("dev", "prod"):
@@ -18,6 +25,7 @@ def _get_mode() -> str:
 
 MODE = _get_mode()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+LITELLM_DEBUG = _get_bool_env("LITELLM_DEBUG", True)
 
 
 TIER_CONFIGS = {
