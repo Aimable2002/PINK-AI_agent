@@ -84,9 +84,10 @@ def record_usage(
     user_id: str,
     tier: str,
     task_id: str | None = None,
-    requests: int = 1,
+    requests: float = 1,
     tool_calls: int = 0,
     cost_usd: float = 0,
+    usage_events: list[dict] | None = None,
 ) -> None:
     client = get_client()
     if task_id:
@@ -101,9 +102,12 @@ def record_usage(
         )
         if existing.data:
             return
+    credits = sum(float(event.get("credits", 0.0) or 0.0) for event in (usage_events or []))
+    if not credits:
+        credits = float(requests)
     client.rpc(
-        "increment_quota",
-        {"_user_id": user_id, "_requests": requests},
+        "charge_usage",
+        {"_user_id": user_id, "_credits": credits},
     ).execute()
     client.table("usage_events").insert(
         {
@@ -113,6 +117,8 @@ def record_usage(
             "requests": requests,
             "tool_calls": tool_calls,
             "cost_usd": cost_usd,
+            "credits": credits,
+            "usage_events": usage_events or [],
         }
     ).execute()
 

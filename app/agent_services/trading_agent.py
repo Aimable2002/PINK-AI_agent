@@ -10,14 +10,18 @@ import redis
 from app.agent_services.base import AgentServicePaused
 from app.config import (
     FORECAST_CACHE_TTL_SECONDS,
+    FORECAST_COST_PER_CALL_USD,
     FORECAST_SIGNAL_CREDIT_COST,
     FORECASTING_ENABLED,
+    REDIS_OPERATION_COST_USD,
     REDIS_URL,
+    TOOL_CALL_CREDIT_SURCHARGE,
 )
 from app.connectors.manager import MCPConnectorManager
 from app.core.forecast_client import forecast_price
 from app.data.supabase_client import insert_trading_signal, touch_service_last_run
 from app.queue.tasks import charge_usage, get_remaining_credits
+from app.core.billing import usage_event
 
 SERVICE_ID = "trading-agent"
 DEFAULT_CONFIG = {
@@ -141,9 +145,24 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
 
     cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     key = _cache_key(pair, timeframe, connector, forecast_models)
+    usage_events = [usage_event(
+        "redis",
+        "redis",
+        "cache_lookup",
+        cost_usd=REDIS_OPERATION_COST_USD,
+        metadata={"cache_key": key},
+    )]
     cached_raw = cache.get(key)
     if cached_raw:
         cached = json.loads(cached_raw)
+        usage_events.append(usage_event(
+            "forecast_service",
+            "backend",
+            "trading_signal",
+            credits=FORECAST_SIGNAL_CREDIT_COST,
+            metadata={"pair": pair, "timeframe": timeframe, "cache_hit": True},
+        ))
+        charge_usage(user_id, {"usage_events": usage_events, "tiers_used": [forecast_model]}, task_id=service_row.get("_billing_task_id"))
         signal_row = insert_trading_signal(
             user_id=user_id,
             agent_service_id=service_row.get("id"),
@@ -174,10 +193,27 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
             market_response = await connector_manager.call_tool(
                 connector, candle_tool, {"pair": pair, "timeframe": timeframe}
             )
+            usage_events.append(usage_event(
+                "tool",
+                connector,
+                candle_tool,
+                credits=TOOL_CALL_CREDIT_SURCHARGE,
+                metadata={"pair": pair, "timeframe": timeframe},
+            ))
             responses = await asyncio.gather(*[
                 forecast_price(model, symbol=pair, timeframe=timeframe, candles=_extract_candles(market_response))
                 for model in forecast_models
             ])
+            usage_events.extend(
+                usage_event(
+                    "forecast_model",
+                    "forecast_provider",
+                    model,
+                    cost_usd=FORECAST_COST_PER_CALL_USD.get(model, 0.0),
+                    metadata={"pair": pair, "timeframe": timeframe},
+                )
+                for model in forecast_models
+            )
             forecast_results = []
             for model, forecast_response in zip(forecast_models, responses):
                 payload = forecast_response if isinstance(forecast_response, list) else [forecast_response]
@@ -216,8 +252,18 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
                 signal=signal["signal"],
                 model_forecasts=forecast_results,
             )
-            from app.queue.tasks import charge_usage
-            charge_usage(user_id, {"credits_used": FORECAST_SIGNAL_CREDIT_COST, "cost_usd": 0.0, "steps": [], "tiers_used": [forecast_model]})
+            usage_events.append(usage_event(
+                "forecast_service",
+                "backend",
+                "trading_signal",
+                credits=FORECAST_SIGNAL_CREDIT_COST,
+                metadata={"pair": pair, "timeframe": timeframe},
+            ))
+            charge_usage(user_id, {
+                "usage_events": usage_events,
+                "steps": [],
+                "tiers_used": [forecast_model],
+            }, task_id=service_row.get("_billing_task_id"))
             touch_service_last_run(service_row["id"])
             return {"signal_id": signal_row["id"], **signal, "cache_hit": False}
         finally:
@@ -229,6 +275,14 @@ async def generate_signal(user_id: str, service_row: dict, connector_manager: MC
             cached_raw = cache.get(key)
             if cached_raw:
                 cached = json.loads(cached_raw)
+                usage_events.append(usage_event(
+                    "forecast_service",
+                    "backend",
+                    "trading_signal",
+                    credits=FORECAST_SIGNAL_CREDIT_COST,
+                    metadata={"pair": pair, "timeframe": timeframe, "cache_hit": True},
+                ))
+                charge_usage(user_id, {"usage_events": usage_events, "tiers_used": [forecast_model]}, task_id=service_row.get("_billing_task_id"))
                 signal_row = insert_trading_signal(
                     user_id=user_id,
                     agent_service_id=service_row.get("id"),

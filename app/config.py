@@ -173,6 +173,11 @@ FORECAST_MODEL_CONFIGS = {
 }
 FORECAST_CACHE_TTL_SECONDS = int(os.environ.get("FORECAST_CACHE_TTL_SECONDS", "600"))
 FORECAST_SIGNAL_CREDIT_COST = float(os.environ.get("FORECAST_SIGNAL_CREDIT_COST", "0.75"))
+FORECAST_COST_PER_CALL_USD = {
+    model: float(os.environ.get(f"{model.upper()}_COST_USD", "0.001"))
+    for model in FORECAST_MODEL_CONFIGS
+}
+REDIS_OPERATION_COST_USD = float(os.environ.get("REDIS_OPERATION_COST_USD", "0.00001"))
 
 
 def get_forecast_config(model_name: str) -> dict:

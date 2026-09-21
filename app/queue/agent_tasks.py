@@ -45,6 +45,7 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
     signal_row = insert_signal(user_id, service_row["id"], channel, raw_text)
 
     try:
+        service_row = {**service_row, "_billing_task_id": self.request.id}
         outcome = asyncio.run(module.score_signal(user_id, service_row, channel, raw_text, signal_row))
     except AgentServicePaused as exc:
         return {"status": "paused", "reason": exc.reason}
@@ -75,6 +76,7 @@ def generate_signal_job(self, user_id: str, service_row: dict):
     try:
         manager = MCPConnectorManager()
         asyncio.run(manager.load_user_connectors(user_id))
+        service_row = {**service_row, "_billing_task_id": self.request.id}
         outcome = asyncio.run(module.generate_signal(user_id, service_row, manager))
     except AgentServicePaused as exc:
         return {"status": "paused", "reason": exc.reason}

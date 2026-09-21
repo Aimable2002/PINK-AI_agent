@@ -48,7 +48,7 @@ def _parse_score(raw_text: str | None) -> float | None:
     return max(0.0, min(1.0, value))
 
 
-async def score_query(prompt: str, call_tier_fn=call_tier) -> float:
+async def score_query(prompt: str, call_tier_fn=call_tier, usage_callback=None) -> float:
     """
     Calls the classifier tier with a scoring instruction. Returns a
     difficulty score in [0.0, 1.0]. Falls back to a safe default (0.5,
@@ -61,6 +61,8 @@ async def score_query(prompt: str, call_tier_fn=call_tier) -> float:
         {"role": "user", "content": prompt},
     ]
     response = await call_tier_fn(_CLASSIFIER_TIER, messages)
+    if usage_callback:
+        usage_callback(response, _CLASSIFIER_TIER)
 
     try:
         raw_text = response.choices[0].message.content
@@ -73,8 +75,8 @@ async def score_query(prompt: str, call_tier_fn=call_tier) -> float:
     return score
 
 
-async def select_tier(prompt: str, call_tier_fn=call_tier) -> str:
-    score = await score_query(prompt, call_tier_fn=call_tier_fn)
+async def select_tier(prompt: str, call_tier_fn=call_tier, usage_callback=None) -> str:
+    score = await score_query(prompt, call_tier_fn=call_tier_fn, usage_callback=usage_callback)
     if score < TIER_THRESHOLDS["small_to_medium"]:
         return "small"
     elif score < TIER_THRESHOLDS["medium_to_best"]:

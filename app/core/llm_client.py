@@ -5,6 +5,7 @@ import httpx
 import litellm
 
 from app.config import FALLBACK_COST_PER_1K_TOKENS_USD, LITELLM_DEBUG, MODE, get_tier_config
+from app.core.billing import usage_event
 
 
 if LITELLM_DEBUG:
@@ -118,6 +119,17 @@ async def web_search(query: str) -> str:
     return "\n".join(formatted)
 
 
+def search_usage_event(query: str, *, result_count: int = 0) -> dict:
+    """Return the configured per-request search charge for the billing ledger."""
+    return usage_event(
+        "search",
+        "serper",
+        "web_search",
+        cost_usd=float(os.environ.get("SERPER_COST_USD", "0.0025")),
+        metadata={"query_length": len(query), "result_count": result_count},
+    )
+
+
 async def browser_use(task: str) -> str:
     """Browser-use shim for the assistant tool surface. The real implementation can be
     wired to a package later; this keeps the runtime contract open without breaking tests."""
@@ -184,9 +196,24 @@ def extract_usage(response, tier: str) -> dict:
 
     return {
         "tier": tier,
+        "model": getattr(response, "model", None) or get_tier_config(tier)["model"],
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "cost_usd": round(cost_usd, 6),
         "priced_by_litellm": priced_by_litellm,
     }
+
+
+def model_usage_event(response, tier: str, *, idempotency_key: str | None = None) -> dict:
+    usage = extract_usage(response, tier)
+    return usage_event(
+        "model",
+        "litellm",
+        usage["model"],
+        cost_usd=usage["cost_usd"],
+        input_tokens=usage["prompt_tokens"],
+        output_tokens=usage["completion_tokens"],
+        metadata={"tier": tier, "priced_by_litellm": usage["priced_by_litellm"]},
+        idempotency_key=idempotency_key,
+    )

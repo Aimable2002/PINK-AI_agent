@@ -206,7 +206,7 @@ async def score_signal(user_id: str, service_row: dict, channel: str | None, raw
         user_id=user_id,
         credit_budget=credit_budget,
     )
-    charge_usage(user_id, result)
+    charge_usage(user_id, result, task_id=service_row.get("_billing_task_id"))
 
     signal = _parse_signal_response(result.get("final_message", ""), raw_text)
     update_signal(signal_row["id"], **{

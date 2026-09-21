@@ -31,16 +31,29 @@ def charge_usage(user_id: str, result: dict, task_id: str | None = None) -> None
     accounting path for background-triggered work.
     """
     tiers = result.get("tiers_used") or ["small"]
+    events = result.get("usage_events") or []
+    if not events:
+        events = [{
+            "operation_type": "run",
+            "provider": "backend",
+            "resource": "unknown",
+            "cost_usd": result.get("cost_usd", 0.0),
+            "credits": result.get("credits_used", 0.0),
+            "metadata": {},
+        }]
+    credits = sum(float(event.get("credits", 0.0) or 0.0) for event in events)
+    cost_usd = sum(float(event.get("cost_usd", 0.0) or 0.0) for event in events)
     record_usage(
         user_id,
         tiers[-1],
         task_id=task_id,
-        requests=max(1, round(result.get("credits_used", 1))),
+        requests=credits,
         tool_calls=sum(
             step.get("connector") != "agent"
             for step in result.get("steps", [])
         ),
-        cost_usd=result.get("cost_usd", 0.0),
+        cost_usd=cost_usd,
+        usage_events=events,
     )
 
 
@@ -124,9 +137,6 @@ def run_paid_job(
         return _finish(self.request.id, user_id, _run(prompt, messages, connectors, mode, user_id))
     except Exception as exc:
         if self.request.retries >= self.max_retries:
-            if user_id:
-                task = get_task_by_job_id(self.request.id)
-                record_usage(user_id, "small", task_id=task.get("id") if task else None)
             update_task_by_job_id(
                 self.request.id,
                 status="failed",
@@ -152,9 +162,6 @@ def run_free_job(
         return _finish(self.request.id, user_id, _run(prompt, messages, connectors, mode, user_id))
     except Exception as exc:
         if self.request.retries >= self.max_retries:
-            if user_id:
-                task = get_task_by_job_id(self.request.id)
-                record_usage(user_id, "small", task_id=task.get("id") if task else None)
             update_task_by_job_id(
                 self.request.id,
                 status="failed",

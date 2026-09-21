@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from app.agent_services import trading_agent
 from app.agent_services import telegram_signal_monitor
 from app.config import LITELLM_DEBUG, get_forecast_config
+from app.core.billing import sum_usage, usage_event
 from app.connectors.manager import ConnectorConfig, MCPConnectorManager
 from app.core.agent_runtime import run_agent_loop
 from app.core.llm_client import get_default_tools
@@ -254,6 +255,48 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal["symbol"], "EURUSD")
         self.assertEqual(signal["direction"], "long")
         self.assertEqual(signal["consensus"], 2)
+
+    def test_usage_events_preserve_exact_decimal_costs(self):
+        events = [
+            usage_event("model", "litellm", "small", cost_usd=0.001234),
+            usage_event("search", "serper", "web_search", credits=0.25),
+        ]
+        cost_usd, credits = sum_usage(events)
+        self.assertEqual(cost_usd, 0.001234)
+        self.assertEqual(credits, 0.3734)
+
+    async def test_agent_result_includes_classifier_and_agent_model_events(self):
+        classifier_response = SimpleNamespace(
+            model="classifier-model",
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            choices=[SimpleNamespace(message=SimpleNamespace(content="0.1"))],
+        )
+        agent_response = SimpleNamespace(
+            model="agent-model",
+            usage=SimpleNamespace(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+            choices=[SimpleNamespace(message=SimpleNamespace(content="done", tool_calls=[]))],
+        )
+
+        async def fake_select(_prompt, usage_callback=None):
+            if usage_callback:
+                usage_callback(classifier_response, "classifier")
+            return "small"
+
+        async def fake_call(_tier, _messages, **_kwargs):
+            return agent_response
+
+        with patch("app.core.llm_client.litellm.completion_cost", return_value=0.01):
+            result = await run_agent_loop(
+                "test",
+                [],
+                [],
+                call_tier_fn=fake_call,
+                select_tier_fn=fake_select,
+                mode="agent",
+            )
+
+        self.assertEqual([event["operation_type"] for event in result["usage_events"]], ["model", "model"])
+        self.assertEqual(result["cost_usd"], 0.02)
 
 
 if __name__ == "__main__":

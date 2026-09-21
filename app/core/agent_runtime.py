@@ -14,8 +14,9 @@ consuming unbounded compute if the model never converges on its own.
 import json
 import asyncio
 
-from app.config import CREDITS_PER_USD, MAX_AGENT_ITERATIONS, TOOL_CALL_CREDIT_SURCHARGE
-from app.core.llm_client import browser_use, call_tier, extract_usage, get_default_tools, web_search
+from app.config import MAX_AGENT_ITERATIONS, TOOL_CALL_CREDIT_SURCHARGE
+from app.core.billing import sum_usage, usage_event
+from app.core.llm_client import browser_use, call_tier, get_default_tools, model_usage_event, search_usage_event, web_search
 from app.connectors.manager import MCPConnectorManager
 from app.connectors.native_tools import NATIVE_CONNECTOR_IDS, call_native_tool, get_native_tool_schemas
 from app.core.router import select_tier
@@ -33,6 +34,7 @@ class AgentRunResult:
         # it purely for finance/auditing visibility in usage_events.
         self.cost_usd: float = 0.0
         self.credits_used: float = 0.0
+        self.usage_events: list[dict] = []
 
     def to_dict(self) -> dict:
         tier = self.tiers_used[-1] if self.tiers_used else "medium"
@@ -44,6 +46,7 @@ class AgentRunResult:
             "tier": tier,
             "cost_usd": round(self.cost_usd, 6),
             "credits_used": round(self.credits_used, 4),
+            "usage_events": self.usage_events,
         }
 
 
@@ -156,7 +159,14 @@ async def run_agent_loop(
             )
             break
 
-        tier = await select_tier_fn(prompt)
+        def record_model_usage(response, usage_tier):
+            result.usage_events.append(model_usage_event(response, usage_tier))
+            result.cost_usd, result.credits_used = sum_usage(result.usage_events)
+
+        try:
+            tier = await select_tier_fn(prompt, usage_callback=record_model_usage)
+        except TypeError:
+            tier = await select_tier_fn(prompt)
         result.tiers_used.append(tier)
 
         call_kwargs = {"tools": tools} if tools else {}
@@ -174,9 +184,8 @@ async def run_agent_loop(
             })
             break
 
-        usage = extract_usage(response, tier)
-        result.cost_usd += usage["cost_usd"]
-        result.credits_used += usage["cost_usd"] * CREDITS_PER_USD
+        result.usage_events.append(model_usage_event(response, tier, idempotency_key=f"iteration:{iteration}:model"))
+        result.cost_usd, result.credits_used = sum_usage(result.usage_events)
 
         tool_calls = _extract_tool_calls(response) if tools else []
 
@@ -222,7 +231,9 @@ async def run_agent_loop(
                     arguments = call["arguments"]
                     if isinstance(arguments, str):
                         arguments = json.loads(arguments)
-                    tool_output = await web_search(arguments.get("query", ""))
+                    query = arguments.get("query", "")
+                    result.usage_events.append(search_usage_event(query))
+                    tool_output = await web_search(query)
                 except Exception as exc:
                     tool_output = f"error: {exc}"
             elif call_name == "browser_use":
@@ -284,7 +295,15 @@ async def run_agent_loop(
             else:
                 tool_output = f"error: unknown tool '{call_name}'"
 
-            result.credits_used += TOOL_CALL_CREDIT_SURCHARGE
+            result.usage_events.append(usage_event(
+                "tool",
+                connector_name or "backend",
+                tool_name,
+                credits=TOOL_CALL_CREDIT_SURCHARGE,
+                metadata={"iteration": iteration},
+                idempotency_key=f"iteration:{iteration}:tool:{call.get('id')}",
+            ))
+            result.cost_usd, result.credits_used = sum_usage(result.usage_events)
             result.steps.append({
                 "iteration": iteration,
                 "tier": tier,
