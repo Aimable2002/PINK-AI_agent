@@ -58,7 +58,7 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
     if outcome.get("should_alert"):
         alert_text = module.format_alert(outcome["channel"], {
             key: value for key, value in outcome.items()
-            if key in {"signal_type", "symbol", "direction", "entry", "take_profits", "stop_loss", "expiry_minutes"}
+            if key in {"signal_type", "symbol", "direction", "order_type", "entry", "take_profits", "stop_loss", "expiry_minutes"}
         })
         send_telegram_alert_job.delay(
             user_id, outcome["signal_id"], outcome["alert_chat"], alert_text

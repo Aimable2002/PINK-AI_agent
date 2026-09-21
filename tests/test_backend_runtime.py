@@ -230,6 +230,28 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal["take_profits"], [4341.0, 4336.0, 4331.0, 4311.0])
         self.assertEqual(signal["parse_status"], "parsed")
 
+    def test_telegram_signal_filter_accepts_index_signal(self):
+        self.assertTrue(telegram_signal_monitor.looks_like_trading_text(
+            "NAS100 SELL\nENTRY @ 30251\nSL: 30433\nTP1: 30081\nTP2: 29894\nTP3: 29692"
+        ))
+
+    def test_telegram_signal_parser_preserves_explicit_order_type(self):
+        signal = telegram_signal_monitor._parse_signal_response(
+            '{"is_signal":true,"signal_type":"forex","symbol":"NAS100",'
+            '"direction":"sell","order_type":"market","entry":30251,'
+            '"take_profits":[30081],"stop_loss":30433}',
+            "NAS100 SELL LIMIT\nENTRY 30251\nSL 30433\nTP1 30081",
+        )
+        self.assertTrue(signal["is_signal"])
+        self.assertEqual(signal["order_type"], "limit")
+
+    def test_telegram_signal_parser_defaults_to_market_order(self):
+        signal = telegram_signal_monitor._parse_signal_response(
+            '{"is_signal":true,"signal_type":"forex","symbol":"EURUSD",'
+            '"direction":"buy","entry":1.08,"take_profits":[1.09],"stop_loss":1.07}'
+        )
+        self.assertEqual(signal["order_type"], "market")
+
     def test_telegram_signal_parser_recovers_null_entry_from_source_range(self):
         signal = telegram_signal_monitor._parse_signal_response(
             '{"entry":null,"symbol":"XAUUSD","direction":"sell",'

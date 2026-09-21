@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
 _TICKER_PATTERN = re.compile(
     r"\$[A-Z]{2,6}\b|"
     r"\b[A-Z]{3,4}/[A-Z]{3,4}\b|"
+    r"\b(?:NAS|US|SPX|GER|DE|UK|DAX|DJ|FTSE)\d{2,5}\b|"
     r"\b(XAU|XAG|BTC|ETH|EUR|GBP|USD|JPY|CHF|CAD|AUD|NZD)(USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD)\b",
     re.IGNORECASE,
 )
@@ -43,6 +44,12 @@ _ENTRY_LABEL = re.compile(r"\bentry\b", re.IGNORECASE)
 _AT_LABEL = re.compile(r"\b(buy|sell|long|short)\b[^.\n]{0,25}?\bat\b", re.IGNORECASE)
 _TP_LABEL = re.compile(r"\btp\s?\d{0,2}\b|\btake\s?profit\b", re.IGNORECASE)
 _SL_LABEL = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
+_ORDER_TYPE_PATTERN = re.compile(
+    r"\b(?:buy|sell|long|short)\s+(limit|stop)\b|"
+    r"\b(limit|stop)\s+(?:buy|sell|long|short)\b|"
+    r"\b(limit|stop)\s+(?:order|entry)\b",
+    re.IGNORECASE,
+)
 # Up to 12 filler characters (e.g. " Price: ", ": ", " now at ", " LIMIT
 # at ") between a label and the number that belongs to it, then the
 # number itself. Kept in its own group with the sign, if any, still
@@ -74,6 +81,13 @@ def _coerce_price(value) -> float:
 def _entry_from_source(text: str) -> float | None:
     match = _ENTRY_PRICE.search(text or "")
     return _coerce_price(match.group(1)) if match else None
+
+
+def _order_type_from_source(text: str) -> str:
+    match = _ORDER_TYPE_PATTERN.search(text or "")
+    if not match:
+        return "market"
+    return next(value.lower() for value in match.groups() if value)
 
 
 def _price_right_after(text: str, pos: int) -> bool:
@@ -120,19 +134,18 @@ def looks_like_trading_text(text: str) -> bool:
     has_sl_price = _has_price_for(_SL_LABEL, text)
     # This is only a cheap candidate gate. The model extracts levels when
     # the message format is unusual.
-    return has_ticker and bool(_ENTRY_LABEL.search(text) or _AT_LABEL.search(text)) and bool(
-        _TP_LABEL.search(text) or _SL_LABEL.search(text)
-    )
+    return has_ticker and has_entry_price and has_tp_price and has_sl_price
 
 
 _SCORING_INSTRUCTIONS = """Extract a trading signal from this Telegram message. Do not score confidence \
 and do not invent missing values. Return ONLY one JSON object with this exact shape:
 {{"is_signal": true|false, "signal_type": "forex"|"binary_option", "symbol": "...", \
-"direction": "buy"|"sell"|"call"|"put", "entry": number|null, \
+"direction": "buy"|"sell"|"call"|"put", "order_type": "market"|"limit"|"stop", "entry": number|null, \
 "take_profits": [number], "stop_loss": number|null, "expiry_minutes": integer|null, \
 "reasoning": "short explanation", "parse_status": "parsed"|"rejected"}}
 
 When the entry is a range such as 4346-48, use its lower/first value (4346) as the numeric entry. \
+Preserve an explicit LIMIT or STOP order from the original message in order_type; use market only when no order type is stated. \
 Use an empty take_profits array when none are present. For binary options, expiry_minutes may be null \
 only when absent. Never fabricate levels.
 
@@ -150,6 +163,10 @@ def _parse_signal_response(text: str, source_text: str = "") -> dict:
         data = json.loads(cleaned)
         signal_type = str(data.get("signal_type", "forex")).lower()
         direction = str(data.get("direction", "")).lower()
+        order_type = _order_type_from_source(source_text)
+        if order_type == "market":
+            model_order_type = str(data.get("order_type", "market")).lower()
+            order_type = model_order_type if model_order_type in {"market", "limit", "stop"} else "market"
         take_profits = [_coerce_price(value) for value in (data.get("take_profits") or [])]
         entry = _coerce_price(data["entry"]) if data.get("entry") is not None else _entry_from_source(source_text)
         stop_loss = _coerce_price(data["stop_loss"]) if data.get("stop_loss") is not None else None
@@ -166,6 +183,7 @@ def _parse_signal_response(text: str, source_text: str = "") -> dict:
             "signal_type": signal_type,
             "symbol": str(data.get("symbol") or "").upper(),
             "direction": direction,
+            "order_type": order_type,
             "entry": entry,
             "take_profits": take_profits,
             "stop_loss": stop_loss,
@@ -213,6 +231,7 @@ async def score_signal(user_id: str, service_row: dict, channel: str | None, raw
         "signal_type": signal.get("signal_type"),
         "symbol": signal.get("symbol"),
         "direction": signal.get("direction"),
+        "order_type": signal.get("order_type", "market"),
         "entry": signal.get("entry"),
         "take_profits": signal.get("take_profits", []),
         "stop_loss": signal.get("stop_loss"),
