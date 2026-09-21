@@ -218,6 +218,28 @@ class TestBackendRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal["take_profits"], [1.09, 1.10])
         self.assertEqual(signal["parse_status"], "parsed")
 
+    def test_telegram_signal_parser_accepts_entry_range(self):
+        signal = telegram_signal_monitor._parse_signal_response(
+            '{"is_signal":true,"signal_type":"forex","symbol":"XAUUSD",'
+            '"direction":"sell","entry":"4346-48",'
+            '"take_profits":[4341,4336,4331,4311],"stop_loss":4358}'
+        )
+        self.assertTrue(signal["is_signal"])
+        self.assertEqual(signal["entry"], 4346.0)
+        self.assertEqual(signal["take_profits"], [4341.0, 4336.0, 4331.0, 4311.0])
+        self.assertEqual(signal["parse_status"], "parsed")
+
+    def test_telegram_signal_parser_recovers_null_entry_from_source_range(self):
+        signal = telegram_signal_monitor._parse_signal_response(
+            '{"entry":null,"symbol":"XAUUSD","direction":"sell",'
+            '"is_signal":false,"stop_loss":4358,"signal_type":"forex",'
+            '"take_profits":[4341,4336,4331,4311]}',
+            "XAUUSD SELL\nENTRY 4346-48\nSL 4358\nTP 4341\nTP 4336\nTP 4331\nTP 4311",
+        )
+        self.assertTrue(signal["is_signal"])
+        self.assertEqual(signal["entry"], 4346.0)
+        self.assertEqual(signal["parse_status"], "parsed")
+
     def test_telegram_signal_parser_rejects_invalid_json(self):
         signal = telegram_signal_monitor._parse_signal_response("not json")
         self.assertFalse(signal["is_signal"])

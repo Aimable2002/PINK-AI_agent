@@ -50,6 +50,30 @@ _SL_LABEL = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
 # signed pip/point delta (+20, -60).
 _NUMBER_AFTER = re.compile(r"[^\d\n]{0,12}([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[+-]?\.\d+)")
 _PIP_SUFFIX = re.compile(r"^\s*(pips?|points?|pts?)\b", re.IGNORECASE)
+_PRICE_RANGE = re.compile(
+    r"^\s*([+-]?\d+(?:,\d{3})*(?:\.\d+)?|[+-]?\.\d+)"
+    r"\s*[-\u2013\u2014]\s*(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)\s*$"
+)
+_ENTRY_PRICE = re.compile(
+    r"\bentry\b[^\d\n]{0,12}"
+    r"([+-]?\d+(?:,\d{3})*(?:\.\d+)?|[+-]?\.\d+)"
+    r"(?:\s*[-\u2013\u2014]\s*(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+))?",
+    re.IGNORECASE,
+)
+
+
+def _coerce_price(value) -> float:
+    if isinstance(value, str):
+        range_match = _PRICE_RANGE.match(value)
+        if range_match:
+            value = range_match.group(1)
+        value = value.replace(",", "").strip()
+    return float(value)
+
+
+def _entry_from_source(text: str) -> float | None:
+    match = _ENTRY_PRICE.search(text or "")
+    return _coerce_price(match.group(1)) if match else None
 
 
 def _price_right_after(text: str, pos: int) -> bool:
@@ -108,6 +132,7 @@ and do not invent missing values. Return ONLY one JSON object with this exact sh
 "take_profits": [number], "stop_loss": number|null, "expiry_minutes": integer|null, \
 "reasoning": "short explanation", "parse_status": "parsed"|"rejected"}}
 
+When the entry is a range such as 4346-48, use its lower/first value (4346) as the numeric entry. \
 Use an empty take_profits array when none are present. For binary options, expiry_minutes may be null \
 only when absent. Never fabricate levels.
 
@@ -118,20 +143,22 @@ Message:
 """
 
 
-def _parse_signal_response(text: str) -> dict:
+def _parse_signal_response(text: str, source_text: str = "") -> dict:
     cleaned = (text or "").strip()
     cleaned = re.sub(r"^```(json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
     try:
         data = json.loads(cleaned)
         signal_type = str(data.get("signal_type", "forex")).lower()
         direction = str(data.get("direction", "")).lower()
-        take_profits = [float(value) for value in (data.get("take_profits") or [])]
+        take_profits = [_coerce_price(value) for value in (data.get("take_profits") or [])]
+        entry = _coerce_price(data["entry"]) if data.get("entry") is not None else _entry_from_source(source_text)
+        stop_loss = _coerce_price(data["stop_loss"]) if data.get("stop_loss") is not None else None
         valid = (
-            bool(data.get("is_signal"))
+            (bool(data.get("is_signal")) or entry is not None)
             and signal_type in {"forex", "binary_option"}
             and direction in {"buy", "sell", "call", "put"}
             and bool(data.get("symbol"))
-            and data.get("entry") is not None
+            and entry is not None
             and (signal_type == "binary_option" or bool(take_profits) or data.get("stop_loss") is not None)
         )
         return {
@@ -139,9 +166,9 @@ def _parse_signal_response(text: str) -> dict:
             "signal_type": signal_type,
             "symbol": str(data.get("symbol") or "").upper(),
             "direction": direction,
-            "entry": float(data["entry"]) if data.get("entry") is not None else None,
+            "entry": entry,
             "take_profits": take_profits,
-            "stop_loss": float(data["stop_loss"]) if data.get("stop_loss") is not None else None,
+            "stop_loss": stop_loss,
             "expiry_minutes": int(data["expiry_minutes"]) if data.get("expiry_minutes") is not None else None,
             "reasoning": str(data.get("reasoning", ""))[:500],
             "parse_status": "parsed" if valid else "rejected",
@@ -181,7 +208,7 @@ async def score_signal(user_id: str, service_row: dict, channel: str | None, raw
     )
     charge_usage(user_id, result)
 
-    signal = _parse_signal_response(result.get("final_message", ""))
+    signal = _parse_signal_response(result.get("final_message", ""), raw_text)
     update_signal(signal_row["id"], **{
         "signal_type": signal.get("signal_type"),
         "symbol": signal.get("symbol"),
