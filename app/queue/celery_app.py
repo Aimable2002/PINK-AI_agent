@@ -14,11 +14,8 @@ celery_app.conf.update(
     task_routes={
         "app.queue.tasks.run_paid_job": {"queue": "paid_priority"},
         "app.queue.tasks.run_free_job": {"queue": "free_standard"},
-        # Signal-pipeline tasks ride the existing free queue -- they're
-        # triggered by the daemon, not a paying-tier chat request, so
-        # they don't compete with paid_priority's latency budget. If
-        # signal volume ever grows enough to need its own queue/worker,
-        # this is the one line that changes.
+        # Signal-pipeline tasks ride the existing free queue. They are
+        # triggered by the daemon, not a paying-tier chat request.
         "app.queue.agent_tasks.score_signal_job": {"queue": "free_standard"},
         "app.queue.agent_tasks.send_telegram_alert_job": {"queue": "free_standard"},
     },
@@ -40,7 +37,7 @@ def get_queue_depth(queue_name: str) -> int:
         return conn.default_channel.client.llen(queue_name)
 
 
-# Production worker startup (separate pools so a paid surge can't starve
-# free-tier throughput, and vice versa):
+# Production worker startup (separate pools so paid and free work can be
+# scaled independently):
 #   celery -A app.queue.celery_app worker -Q paid_priority --concurrency=6 -n paid@%h
 #   celery -A app.queue.celery_app worker -Q free_standard --concurrency=2 -n free@%h
