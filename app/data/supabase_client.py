@@ -303,3 +303,55 @@ def list_trading_signals(user_id: str, limit: int = 50) -> list[dict]:
         .execute()
     )
     return resp.data or []
+
+
+# ------------------------------------------------------------------- EA execution
+
+def list_pending_trade_orders(user_id: str, limit: int = 50) -> list[dict]:
+    client = get_client()
+    resp = (
+        client.table("trade_orders")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "pending")
+        .order("created_at", desc=False)
+        .limit(min(limit, 200))
+        .execute()
+    )
+    return resp.data or []
+
+
+def claim_trade_order(order_id: str, user_id: str, client_id: str) -> dict | None:
+    response = get_client().rpc(
+        "claim_trade_order",
+        {"_order_id": order_id, "_user_id": user_id, "_client_id": client_id},
+    ).execute()
+    return (response.data or [None])[0]
+
+
+def create_trade_execution(order_id: str, user_id: str, fields: dict) -> dict:
+    client = get_client()
+    order = (
+        client.table("trade_orders")
+        .select("id, user_id, status")
+        .eq("id", order_id)
+        .eq("user_id", user_id)
+        .execute()
+    ).data
+    if not order:
+        raise ValueError("Order not found.")
+    if order[0]["status"] not in {"claimed", "executed", "rejected", "failed", "expired"}:
+        raise ValueError("Order must be claimed before reporting execution.")
+
+    row = {
+        "order_id": order_id,
+        "user_id": user_id,
+        **fields,
+    }
+    response = client.table("trade_executions").upsert(row, on_conflict="order_id").execute()
+    execution = (response.data or [{}])[0]
+    client.table("trade_orders").update({
+        "status": "executed" if fields["status"] in {"executed", "partial"} else fields["status"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", order_id).eq("user_id", user_id).execute()
+    return execution
