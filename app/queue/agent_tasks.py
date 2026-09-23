@@ -23,6 +23,7 @@ Celery infrastructure, just new task names.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from app.agent_services import REGISTRY
 from app.agent_services.base import AgentServicePaused
@@ -30,6 +31,9 @@ from app.connectors.manager import MCPConnectorManager
 from app.connectors import telegram_service
 from app.data.supabase_client import insert_signal, update_signal
 from app.queue.celery_app import celery_app
+
+
+log = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.queue.agent_tasks.score_signal_job", bind=True, max_retries=2)
@@ -45,13 +49,17 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
     signal_row = insert_signal(user_id, service_row["id"], channel, raw_text)
 
     try:
-        service_row = {**service_row, "_billing_task_id": self.request.id}
+        # Signal-monitor jobs do not have an application `tasks` row. The
+        # Celery request id therefore cannot be used as usage_events.task_id,
+        # which is a foreign key to tasks.id.
+        service_row = {**service_row, "_billing_task_id": None}
         outcome = asyncio.run(module.score_signal(user_id, service_row, channel, raw_text, signal_row))
     except AgentServicePaused as exc:
         return {"status": "paused", "reason": exc.reason}
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             update_signal(signal_row["id"], alert_error=str(exc))
+            log.exception("signal scoring failed permanently signal_id=%s", signal_row.get("id"))
             return {"status": "error", "detail": str(exc)}
         raise self.retry(exc=exc, countdown=5)
 
@@ -64,7 +72,9 @@ def score_signal_job(self, user_id: str, service_row: dict, channel: str | None,
             user_id, outcome["signal_id"], outcome["alert_chat"], alert_text
         )
 
-    return {"status": "scored", **{k: v for k, v in outcome.items() if k != "raw_text"}}
+    result = {"status": "scored", **{k: v for k, v in outcome.items() if k != "raw_text"}}
+    log.info("signal scored signal_id=%s parse_status=%s", signal_row.get("id"), outcome.get("parse_status"))
+    return result
 
 
 @celery_app.task(name="app.queue.agent_tasks.generate_signal_job", bind=True, max_retries=2)
