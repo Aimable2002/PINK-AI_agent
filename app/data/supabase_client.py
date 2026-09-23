@@ -307,17 +307,14 @@ def list_trading_signals(user_id: str, limit: int = 50) -> list[dict]:
 
 # ------------------------------------------------------------------- EA execution
 
-def list_pending_trade_orders(user_id: str, limit: int = 50) -> list[dict]:
+def list_pending_trade_orders(user_id: str, limit: int = 50, client_id: str | None = None) -> list[dict]:
     client = get_client()
-    resp = (
-        client.table("trade_orders")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("status", "pending")
-        .order("created_at", desc=False)
-        .limit(min(limit, 200))
-        .execute()
-    )
+    query = client.table("trade_orders").select("*").eq("user_id", user_id)
+    if client_id:
+        query = query.or_(f"status.eq.pending,and(status.eq.claimed,claimed_by.eq.{client_id})")
+    else:
+        query = query.eq("status", "pending")
+    resp = query.order("created_at", desc=False).limit(min(limit, 200)).execute()
     return resp.data or []
 
 

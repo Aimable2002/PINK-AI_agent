@@ -27,9 +27,10 @@ class ExecutionReceipt(BaseModel):
 @router.get("/orders")
 async def pending_orders(
     limit: int = Query(default=50, ge=1, le=200),
+    client_id: str | None = Query(default=None, max_length=200),
     user: UserContext = Depends(get_current_user),
 ):
-    return {"orders": list_pending_trade_orders(user.user_id, limit)}
+    return {"orders": list_pending_trade_orders(user.user_id, limit, client_id)}
 
 
 @router.post("/orders/{order_id}/claim")

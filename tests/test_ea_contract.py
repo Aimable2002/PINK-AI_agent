@@ -20,7 +20,7 @@ class TestEAContract(unittest.TestCase):
                 response = TestClient(app).get("/v1/ea/orders")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {"orders": [{"id": "order-1"}]})
-            list_orders.assert_called_once_with("user-1", 50)
+            list_orders.assert_called_once_with("user-1", 50, None)
         finally:
             app.dependency_overrides.clear()
 
