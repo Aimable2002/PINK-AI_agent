@@ -40,7 +40,7 @@ _TICKER_PATTERN = re.compile(
     r"\b(XAU|XAG|BTC|ETH|EUR|GBP|USD|JPY|CHF|CAD|AUD|NZD)(USD|EUR|GBP|JPY|CHF|CAD|AUD|NZD)\b",
     re.IGNORECASE,
 )
-_ENTRY_LABEL = re.compile(r"\b(entry|buy|sell|now|buy now|sell now)\b", re.IGNORECASE)
+_ENTRY_LABEL = re.compile(r"\b(entry|buy|sell|now|buy\s+now|sell\s+now)\b", re.IGNORECASE)
 _AT_LABEL = re.compile(r"\b(buy|sell|long|short)\b[^.\n]{0,25}?\bat\b", re.IGNORECASE)
 _TP_LABEL = re.compile(r"\btp\s?\d{0,2}\b|\btake\s?profit\b", re.IGNORECASE)
 _SL_LABEL = re.compile(r"\bsl\b|\bstop\s?loss\b", re.IGNORECASE)
