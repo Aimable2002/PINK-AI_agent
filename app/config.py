@@ -31,7 +31,8 @@ LITELLM_DEBUG = _get_bool_env("LITELLM_DEBUG", True)
 TIER_CONFIGS = {
     "dev": {
         "classifier": {
-            "model": "openrouter/inclusionai/ling-3.0-flash-vl:free",
+            # "model": "openrouter/inclusionai/ling-3.0-flash-vl:free",
+            "model": "openrouter/nex-agi/nex-n2.5-mini:free",
             "api_base": None,
             "api_key_env": "OPENROUTER_API_KEY",
         },
